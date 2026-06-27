@@ -77,6 +77,19 @@ enum Action {
     Build(u32, u32, BuildingKind),
     Demolish(u32, u32),
     SetEnabled(u32, u32, bool),
+    SetPriority(u32, u32, i32),
+}
+
+/// Auswählbare Prioritätsstufen (höher = wird bei Energie-Knappheit zuerst
+/// bedient). Werte passen zur Drossel-Logik in `core`.
+const PRIORITY_LEVELS: [(&str, i32); 3] = [("Hoch", 10), ("Normal", 0), ("Niedrig", -10)];
+
+fn priority_name(priority: i32) -> String {
+    PRIORITY_LEVELS
+        .iter()
+        .find(|(_, v)| *v == priority)
+        .map(|(label, _)| label.to_string())
+        .unwrap_or_else(|| priority.to_string())
 }
 
 struct BuildApp {
@@ -171,6 +184,14 @@ impl BuildApp {
             self.log.push(format!("{what} @ ({x},{y})"));
         }
     }
+
+    /// Setzt die Drossel-Priorität eines Gebäudes.
+    fn set_priority(&mut self, x: u32, y: u32, p: i32) {
+        if self.grid.set_priority(x, y, p) {
+            self.log
+                .push(format!("Priorität {} @ ({x},{y})", priority_name(p)));
+        }
+    }
 }
 
 impl eframe::App for BuildApp {
@@ -218,6 +239,7 @@ impl eframe::App for BuildApp {
                 Action::Build(x, y, kind) => self.build(x, y, kind),
                 Action::Demolish(x, y) => self.demolish(x, y),
                 Action::SetEnabled(x, y, on) => self.set_enabled(x, y, on),
+                Action::SetPriority(x, y, p) => self.set_priority(x, y, p),
             }
         }
 
@@ -357,6 +379,23 @@ impl BuildApp {
                                     actions.push(Action::SetEnabled(x, y, !b.enabled));
                                     ui.close_menu();
                                 }
+                                // Priorität nur für Energieverbraucher sinnvoll.
+                                if b.kind.spec().energy_demand > 0.0 {
+                                    ui.menu_button(
+                                        format!("Priorität: {}", priority_name(b.priority)),
+                                        |ui| {
+                                            for (label, val) in PRIORITY_LEVELS {
+                                                if ui
+                                                    .selectable_label(b.priority == val, label)
+                                                    .clicked()
+                                                {
+                                                    actions.push(Action::SetPriority(x, y, val));
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        },
+                                    );
+                                }
                                 if ui.button("Abreißen").clicked() {
                                     actions.push(Action::Demolish(x, y));
                                     ui.close_menu();
@@ -374,14 +413,19 @@ impl BuildApp {
         match tile.building {
             Some(b) => {
                 let state = if b.enabled { "" } else { " — aus" };
-                if b.kind.spec().output.is_some() {
+                let spec = b.kind.spec();
+                if spec.output.is_some() {
                     let mult = self.grid.adjacency_multiplier(x, y);
-                    format!(
+                    let mut s = format!(
                         "{}{state} auf {}\nAdjazenz ×{:.2}",
                         name(b.kind),
                         terrain_name(tile.terrain),
                         mult
-                    )
+                    );
+                    if spec.energy_demand > 0.0 {
+                        s.push_str(&format!("\nPriorität: {}", priority_name(b.priority)));
+                    }
+                    s
                 } else {
                     format!("{}{state} auf {}", name(b.kind), terrain_name(tile.terrain))
                 }

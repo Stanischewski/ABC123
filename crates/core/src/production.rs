@@ -281,6 +281,52 @@ mod tests {
     }
 
     #[test]
+    fn set_priority_redirects_scarce_energy() {
+        // Knappe Energie, zwei *verschiedene* Verbraucher: Hütte (Legierungen)
+        // und Elektronik-Fab. Wer Priorität bekommt, läuft; der andere hungert.
+        let build = |smelter_first: bool| {
+            let mut g = Grid::new(3, 1, Terrain::Barren);
+            g.place(0, 0, Building::new(BuildingKind::Smelter)).unwrap();
+            g.place(1, 0, Building::new(BuildingKind::ElectronicsFab)).unwrap();
+            g.place(2, 0, Building::new(BuildingKind::SolarCollector)).unwrap();
+            if smelter_first {
+                g.set_priority(0, 0, 10);
+            } else {
+                g.set_priority(1, 0, 10);
+            }
+            g
+        };
+        // Solar bei großem Radius → ~4 Energie; Bedarf 3 (Hütte) + 4 (Fab) = 7.
+        let r = AU / (0.4_f64).sqrt();
+        let mut stocked = || {
+            let mut s = Stockpile::new();
+            s.set(Resource::Metals, 100_000.0);
+            s.set(Resource::Silicates, 100_000.0);
+            s
+        };
+
+        // Hütte zuerst: sie läuft voll (50 Legierungen), die Fab hungert.
+        let mut sa = stocked();
+        resolve_step(&build(true), &mut sa, r, 100.0);
+        // Fab zuerst: sie läuft voll, die Hütte bekommt kaum/nichts.
+        let mut sb = stocked();
+        resolve_step(&build(false), &mut sb, r, 100.0);
+
+        assert!(
+            sa.get(Resource::Alloys) > sb.get(Resource::Alloys) + 10.0,
+            "Hütte mit Priorität sollte deutlich mehr Legierungen liefern: {} vs {}",
+            sa.get(Resource::Alloys),
+            sb.get(Resource::Alloys)
+        );
+        assert!(
+            sb.get(Resource::Electronics) > sa.get(Resource::Electronics) + 5.0,
+            "Fab mit Priorität sollte deutlich mehr Elektronik liefern: {} vs {}",
+            sb.get(Resource::Electronics),
+            sa.get(Resource::Electronics)
+        );
+    }
+
+    #[test]
     fn disabled_building_is_inert() {
         // Mine + Solar, aber der Solarkollektor ist ausgeschaltet → keine
         // Energie → die Mine fördert nichts.

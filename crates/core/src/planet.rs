@@ -318,6 +318,17 @@ impl Grid {
         false
     }
 
+    /// Setzt die Drossel-Priorität eines Gebäudes. Gibt `true` bei Erfolg.
+    pub fn set_priority(&mut self, x: u32, y: u32, priority: i32) -> bool {
+        if let Some(i) = self.index(x, y) {
+            if let Some(b) = &mut self.tiles[i].building {
+                b.priority = priority;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Die orthogonalen Nachbar-Gebäude von `(x, y)` (4er-Nachbarschaft).
     /// Ausgeschaltete Gebäude zählen nicht (sie sind inert).
     pub fn neighbor_buildings(&self, x: u32, y: u32) -> Vec<BuildingKind> {
