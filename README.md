@@ -2,7 +2,7 @@
  
 > Ein browserbasiertes Weltraum-Strategiespiel: führe eine Zivilisation von einem einzelnen Planeten bis zum galaktischen Imperium.
  
-**Status:** Phase 0 – Fundament · sehr frühe Entwicklung · noch nicht spielbar
+**Status:** Phase 1 – Bau-Ebene im Aufbau · frühe Entwicklung · noch nicht spielbar
  
 Inspiriert von *EVE Online* (persistente, von Spielern geformte Welt), *Die Stämme* (asynchroner Aufbau und Eroberung) und langsamer, taktischer Raumschlacht. Über allem steht die **Kardaschow-Skala** als Fortschrittsachse — du steigst auf, indem du immer mehr Energie beherrschst.
  
@@ -38,7 +38,7 @@ Das Workspace-Gerüst (Phase 0) steht:
 │   └── Oekonomie-und-System-Ebene.md  # Vertiefung: Ökonomie, Logistik, System-Ebene
 └── crates/
     ├── core/           # Spielregeln, Kepler, geteilte Typen (Server + Client)
-    ├── server/         # Axum, autoritative Simulation (Postgres folgt)
+    ├── server/         # Axum, Postgres-Persistenz, liefert auch die Web-UI aus
     └── client/         # egui/eframe-Bau-Ebene (Bevy-Systemansicht folgt Phase 2)
 ```
 
@@ -49,20 +49,24 @@ std-`core` verdeckt. Umgesetzt:
   Newton-Raphson), Körper-Hierarchie (Mond ⊂ Planet ⊂ Stern), das
   Ressourcenmodell (3 + 2 + 1), Energiebudget mit Priorität, Logistik-Effizienz
   (`min(1, Angebot/Bedarf)`) und die Produktionsrate-Formel.
-- **`core`** (Phase 1, Bau-Ebene) — Planeten-Raster mit Gelände-Typen, Gebäude
-  (Förderer, Raffinerien, Solar/Fusion, Lager) mit Platzierungsregeln,
-  **Adjazenz-Boni** aus der Nachbarschaft und eine **Produktionsauflösung**, die
-  ein Lager über `dt` fortschreibt — energie- und input-gedrosselt, mit an den
-  Bahnradius gekoppeltem Solarertrag (`1/r²`). Alles deterministisch und getestet.
-- **`server`** — Axum + optionale Postgres-Persistenz: `GET /health`,
-  `GET /system` (Zustand als JSON), `GET /ws` (WebSocket-Stream der Positionen).
+- **`core`** (Phase 1, Bau-Ebene) — Planeten-Raster mit Gelände-Typen und
+  Gebäuden (Hauptgebäude, Förderer, Raffinerien, Forschung, Solar/Fusion, Lager)
+  mit Platzierungsregeln, **Adjazenz-Boni** aus der Nachbarschaft, **Bauschlange
+  als kontinuierlicher Ressourcenfluss** (kriecht bei Mangel) und einer
+  **Produktionsauflösung**, die ein Lager über `dt` fortschreibt — energie- und
+  input-gedrosselt nach Priorität, mit an den Bahnradius gekoppeltem Solarertrag
+  (`1/r²`). Alles deterministisch und getestet.
+- **`server`** — Axum + optionale Postgres-Persistenz (schneller Fallback in den
+  Speicherbetrieb, wenn die DB fehlt): `GET /health`, `GET /system`, `GET /ws`
+  (Positions-Stream) — und liefert die gebaute Browser-UI aus `dist/` aus.
 - **`client`** — egui/eframe-Oberfläche mit zwei Ansichten: die **Bau-Ebene**
-  (Planeten-Raster mit Gelände-Farben, Gebäude-Palette, Bauen/Abreißen per Klick,
-  Adjazenz im Tooltip, Lager-/Energie-Anzeige) und die **schematische
-  System-Ansicht** (Körper auf ihren Kepler-Bahnen als Marker, an die Sim-Zeit
-  gekoppelt). Simulations-Schritte (+1 h / +1 Tag / Auto-Tick) bewegen beides.
-  Die gesamte Logik liegt im geteilten Kern — der Client stellt nur dar. Läuft
-  nativ *und* im Browser (WebAssembly) aus derselben Quelle.
+  (Gelände-Raster, Gebäude-Palette, Bauen/Abreißen/Ein-Aus, Prioritäten,
+  Lager-Raten `+x/h`, Energie-Balken, Platzierungs-Vorschau beim Hover und
+  Gebäude-Info per Rechtsklick) und die **schematische System-Ansicht** (Körper
+  auf ihren Kepler-Bahnen als Marker, an die Sim-Zeit gekoppelt). Simulations-
+  Schritte (+1 h / +1 Tag / Auto-Tick) bewegen beides. Die gesamte Logik liegt
+  im geteilten Kern — der Client stellt nur dar. Läuft nativ *und* im Browser
+  (WebAssembly) aus derselben Quelle.
  
 ## Bauen & Ausführen
 
@@ -148,6 +152,7 @@ Das Design ist die derzeitige Hauptsubstanz des Projekts:
 - **[docs/DESIGN.md](docs/DESIGN.md)** — Vision, die drei Ebenen, Kernmechaniken, Architektur, Roadmap.
 - **[docs/Oekonomie-und-System-Ebene.md](docs/Oekonomie-und-System-Ebene.md)** — vertieft Ressourcen, Produktionsketten, Logistik als räumliche Kapazität, Lagrange-Punkte und den rentablen Radius.
 - **[docs/strukturen.md](docs/strukturen.md)** — Katalog der Bau- und Orbitalstrukturen nach Ebene: Rolle, Verbrauch/Ausstoß, Gelände-Bindung und Platz in der Aufstiegsleiter.
+- **[docs/TODO.md](docs/TODO.md)** — lebende Aufgabenliste nach Roadmap-Phasen: was erledigt ist und was offen.
 ## Roadmap (Kurzfassung)
  
 - **Phase 0 — Fundament:** Simulationsmodell, Workspace-Gerüst, Postgres-Grundlage.
