@@ -32,6 +32,12 @@ pub struct StepReport {
     pub energy_demand: f64,
     /// Verstrichene Sim-Zeit dieses Schritts (Sekunden).
     pub dt: f64,
+    /// **Struktureller Netto-Fluss je Stoff (Einheiten/Sekunde)**, ausgerichtet
+    /// auf [`Resource::ALL`]: Produktion − Verbrauch, energie-gedrosselt, aber
+    /// *ungeklemmt* durch Lagerdecke und Eingangsmangel. Zeigt den Überschuss
+    /// (positiv) bzw. das Defizit (negativ) der Wirtschaft — unabhängig davon,
+    /// ob ein Lager gerade voll oder leer ist.
+    pub net_flow: [f64; Resource::COUNT],
 }
 
 impl StepReport {
@@ -39,12 +45,21 @@ impl StepReport {
     pub fn energy_satisfied(&self) -> bool {
         self.energy_supply + 1e-9 >= self.energy_demand
     }
+
+    /// Struktureller Netto-Fluss eines Stoffs (Einheiten/Sekunde).
+    pub fn net_flow_of(&self, r: Resource) -> f64 {
+        self.net_flow[r.index()]
+    }
 }
 
 /// Schreibt `stock` um `dt` Sekunden fort, gegeben das Raster und den aktuellen
 /// Bahnradius des Körpers (für den Solarertrag).
 pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt: f64) -> StepReport {
     let dt = dt.max(0.0);
+
+    // Struktureller Netto-Fluss je Stoff (Einheiten/Sekunde), ungeklemmt durch
+    // Lagerdecke und Eingangsmangel — siehe [`StepReport::net_flow`].
+    let mut net = [0.0_f64; Resource::COUNT];
 
     // --- 1. Energie-Angebot ---------------------------------------------------
     let solar_factor = if orbit_radius_km > 0.0 {
@@ -65,12 +80,13 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
             // Fusion: durch vorhandenes Gas begrenzt (verbrennt Startbestand).
             let needed = spec.fuel_rate * dt;
             let frac = if needed > 0.0 {
-                (stock.get(crate::resource::Resource::Gases) / needed).clamp(0.0, 1.0)
+                (stock.get(Resource::Gases) / needed).clamp(0.0, 1.0)
             } else {
                 1.0
             };
-            stock.add(crate::resource::Resource::Gases, -spec.fuel_rate * dt * frac);
+            stock.add(Resource::Gases, -spec.fuel_rate * dt * frac);
             energy_supply += spec.energy_output * frac;
+            net[Resource::Gases.index()] -= spec.fuel_rate * frac;
         } else if spec.energy_output > 0.0 {
             energy_supply += spec.energy_output;
         }
@@ -154,6 +170,16 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
             }
 
             let rate = spec.base_rate * grid.adjacency_multiplier(x, y) * avail_at(x, y);
+
+            // Struktureller Netto-Fluss (ungeklemmt): volle Produktion und
+            // voller Eingangsbedarf, unabhängig von Lagerdecke und Vorrat.
+            net[output.index()] += rate;
+            if let Some(recipe) = output.recipe() {
+                for (res, qty) in recipe.inputs {
+                    net[res.index()] -= rate * qty;
+                }
+            }
+
             let desired = rate * dt;
             if desired <= 0.0 {
                 continue;
@@ -205,6 +231,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
         energy_supply,
         energy_demand,
         dt,
+        net_flow: net,
     }
 }
 
@@ -426,6 +453,47 @@ mod tests {
         // Lange Zeit: Förderung staut sich an der Decke.
         resolve_step(&g, &mut stock, AU, 1_000_000.0);
         assert!((stock.get(Resource::Metals) - cap).abs() < 1e-6);
+    }
+
+    #[test]
+    fn net_flow_shows_surplus_independent_of_storage() {
+        // Mine fördert 1/s Metalle, Hütte verbraucht 1/s (0.5 Legierungen × 2).
+        // Strukturell ±0 für Metalle, +0.5/s Legierungen — auch bei vollem Lager.
+        let mut g = Grid::new(5, 1, Terrain::Barren);
+        g.set_terrain(0, 0, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(2, 0, Building::new(BuildingKind::Smelter)).unwrap();
+        g.place(3, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        g.place(4, 0, Building::new(BuildingKind::Depot)).unwrap();
+
+        // Lager voll → die *tatsächliche* Änderung wäre ~0, der Saldo aber nicht.
+        let mut stock = Stockpile::new();
+        let cap = g.storage_capacity();
+        stock.set(Resource::Metals, cap);
+        stock.set(Resource::Alloys, cap);
+
+        let rep = resolve_step(&g, &mut stock, AU, 100.0);
+        // Metalle: 1 produziert − 1 verbraucht = 0.
+        assert!(rep.net_flow_of(Resource::Metals).abs() < 1e-9);
+        // Legierungen: 0.5/s Überschuss, unabhängig vom vollen Lager.
+        assert!((rep.net_flow_of(Resource::Alloys) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn net_flow_shows_deficit_when_input_short() {
+        // Hütte ohne Mine: struktureller Metall-Bedarf erscheint als Defizit,
+        // auch wenn (leeres Lager) tatsächlich gar nichts verbraucht wird.
+        let mut g = Grid::new(2, 1, Terrain::Barren);
+        g.place(0, 0, Building::new(BuildingKind::Smelter)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        let mut stock = Stockpile::new(); // kein Metall
+        let rep = resolve_step(&g, &mut stock, AU, 100.0);
+        // Hütte will 0.5/s Legierungen → 1.0/s Metalle: Defizit −1.0/s.
+        assert!((rep.net_flow_of(Resource::Metals) + 1.0).abs() < 1e-9);
+        // Tatsächlich wurde nichts produziert (kein Input).
+        assert_eq!(stock.get(Resource::Alloys), 0.0);
     }
 
     #[test]

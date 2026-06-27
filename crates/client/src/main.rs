@@ -143,45 +143,40 @@ impl BuildApp {
         let _ = gamecore::advance(&mut self.grid, &mut self.stock, self.orbit_radius_km, dt);
     }
 
-    /// Netto-Raten je Ressource (pro Stunde, ausgerichtet auf `Resource::ALL`)
-    /// und Energie-Bericht für ein gegebenes Raster — über eine 1-Stunden-
-    /// Vorschau auf Kopien, ohne den echten Zustand zu ändern. Berücksichtigt
-    /// auch den Materialzug laufender Baustellen.
-    fn grid_rates(&self, grid: &Grid) -> (Vec<f64>, StepReport) {
+    /// Sim-Bericht für ein gegebenes Raster — über eine 1-Stunden-Vorschau auf
+    /// Kopien, ohne den echten Zustand zu ändern. Liefert u. a. den
+    /// strukturellen Netto-Fluss je Stoff (Überschuss/Defizit).
+    fn grid_report(&self, grid: &Grid) -> StepReport {
         let mut g = grid.clone();
         let mut s = self.stock.clone();
-        let rep = gamecore::advance(&mut g, &mut s, self.orbit_radius_km, 3_600.0);
-        let rates = Resource::ALL
-            .iter()
-            .map(|r| s.get(*r) - self.stock.get(*r))
-            .collect();
-        (rates, rep)
+        gamecore::advance(&mut g, &mut s, self.orbit_radius_km, 3_600.0)
     }
 
     /// Projizierte Auswirkung, wenn `kind` an `(x, y)` gebaut würde — die
-    /// *eingeschwungene* Änderung von Einkommen und Energie (das Gebäude sofort
-    /// betriebsbereit gedacht), gegen den aktuellen Zustand.
+    /// *eingeschwungene* Änderung von Saldo (Überschuss/Defizit) und Energie
+    /// (das Gebäude sofort betriebsbereit gedacht), gegen den aktuellen Zustand.
     fn placement_tooltip(&self, x: u32, y: u32, kind: BuildingKind) -> String {
-        let (base, base_rep) = self.grid_rates(&self.grid);
+        let base = self.grid_report(&self.grid);
         let mut g = self.grid.clone();
         let _ = g.place(x, y, Building::new(kind));
-        let (hyp, hyp_rep) = self.grid_rates(&g);
+        let hyp = self.grid_report(&g);
 
         let mut s = format!(
-            "Bauen: {} ({})\n— Auswirkung (eingeschwungen) —",
+            "Bauen: {} ({})\n— Auswirkung auf den Saldo —",
             name(kind),
             cost_string(kind.spec().build_cost)
         );
         let mut any = false;
         for (i, r) in Resource::ALL.iter().enumerate() {
-            let d = hyp[i] - base[i];
+            // Änderung des strukturellen Saldos (Einheiten/Stunde).
+            let d = (hyp.net_flow[i] - base.net_flow[i]) * 3_600.0;
             if d.abs() > 0.5 {
                 s.push_str(&format!("\n{r:?} {d:+.0}/h"));
                 any = true;
             }
         }
-        let ds = hyp_rep.energy_supply - base_rep.energy_supply;
-        let dd = hyp_rep.energy_demand - base_rep.energy_demand;
+        let ds = hyp.energy_supply - base.energy_supply;
+        let dd = hyp.energy_demand - base.energy_demand;
         if ds.abs() > 0.05 {
             s.push_str(&format!("\nEnergie-Angebot {ds:+.1}/s"));
             any = true;
@@ -319,12 +314,13 @@ impl BuildApp {
                     ui.selectable_value(selected, kind, label);
                 }
 
-                // Live-Vorschau (1 Sim-Stunde): Netto-Raten und Energie-Bilanz.
-                let (rates, rep) = self.grid_rates(&self.grid);
+                // Live-Vorschau (1 Sim-Stunde): struktureller Saldo + Energie.
+                let rep = self.grid_report(&self.grid);
 
                 ui.separator();
                 let cap = self.grid.storage_capacity();
                 ui.heading(format!("Lager (Kap. {cap:.0})"));
+                ui.small("Saldo = Überschuss/Defizit, unabhängig vom Lagerstand.");
                 egui::Grid::new("stock").striped(true).num_columns(3).show(ui, |ui| {
                     for (i, r) in Resource::ALL.iter().enumerate() {
                         ui.label(format!("{r:?}"));
@@ -341,8 +337,8 @@ impl BuildApp {
                             };
                             ui.colored_label(col, format!("{amt:.0} / {cap:.0}"));
                         }
-                        // Netto-Änderung über die nächste Sim-Stunde.
-                        let (txt, col) = rate_label(rates[i]);
+                        // Struktureller Saldo (Einheiten/Stunde), unabhängig vom Lager.
+                        let (txt, col) = rate_label(rep.net_flow[i] * 3_600.0);
                         ui.colored_label(col, txt);
                         ui.end_row();
                     }

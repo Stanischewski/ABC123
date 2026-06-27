@@ -36,9 +36,25 @@ pub enum Resource {
 }
 
 impl Resource {
+    /// Anzahl der Ressourcen — Länge ausgerichteter Arrays (z. B. Netto-Flüsse).
+    pub const COUNT: usize = 7;
+
+    /// Position in [`Resource::ALL`] — Index für ausgerichtete Arrays.
+    pub fn index(self) -> usize {
+        match self {
+            Resource::Metals => 0,
+            Resource::Silicates => 1,
+            Resource::Gases => 2,
+            Resource::Alloys => 3,
+            Resource::Electronics => 4,
+            Resource::Composite => 5,
+            Resource::Research => 6,
+        }
+    }
+
     /// Alle Ressourcen in kanonischer Reihenfolge — praktisch für Lager-Arrays
     /// und UI.
-    pub const ALL: [Resource; 7] = [
+    pub const ALL: [Resource; Resource::COUNT] = [
         Resource::Metals,
         Resource::Silicates,
         Resource::Gases,
