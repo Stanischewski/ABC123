@@ -147,6 +147,7 @@ Das Design ist die derzeitige Hauptsubstanz des Projekts:
  
 - **[docs/DESIGN.md](docs/DESIGN.md)** — Vision, die drei Ebenen, Kernmechaniken, Architektur, Roadmap.
 - **[docs/Oekonomie-und-System-Ebene.md](docs/Oekonomie-und-System-Ebene.md)** — vertieft Ressourcen, Produktionsketten, Logistik als räumliche Kapazität, Lagrange-Punkte und den rentablen Radius.
+- **[docs/strukturen.md](docs/strukturen.md)** — Katalog der Bau- und Orbitalstrukturen nach Ebene: Rolle, Verbrauch/Ausstoß, Gelände-Bindung und Platz in der Aufstiegsleiter.
 ## Roadmap (Kurzfassung)
  
 - **Phase 0 — Fundament:** Simulationsmodell, Workspace-Gerüst, Postgres-Grundlage.
