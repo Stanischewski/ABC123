@@ -74,7 +74,9 @@ enum View {
 /// vermeidet Borrow-Konflikte.
 enum Action {
     Step(f64),
-    Toggle(u32, u32),
+    Build(u32, u32, BuildingKind),
+    Demolish(u32, u32),
+    SetEnabled(u32, u32, bool),
 }
 
 struct BuildApp {
@@ -86,7 +88,6 @@ struct BuildApp {
     orbit_radius_km: f64,
     selected: BuildingKind,
     auto: bool,
-    last_report: Option<StepReport>,
     log: Vec<String>,
 }
 
@@ -110,8 +111,7 @@ impl BuildApp {
             orbit_radius_km,
             selected: BuildingKind::MetalMine,
             auto: false,
-            last_report: None,
-            log: vec!["Willkommen. Wähle ein Gebäude und klicke eine Kachel.".into()],
+            log: vec!["Willkommen. Linksklick baut · Rechtsklick öffnet das Menü.".into()],
         }
     }
 
@@ -121,29 +121,25 @@ impl BuildApp {
             return;
         }
         self.sim_time += dt;
-        self.last_report = Some(gamecore::resolve_step(
-            &self.grid,
-            &mut self.stock,
-            self.orbit_radius_km,
-            dt,
-        ));
+        let _ = gamecore::resolve_step(&self.grid, &mut self.stock, self.orbit_radius_km, dt);
     }
 
-    /// Platziert das gewählte Gebäude bzw. reißt ein vorhandenes ab.
-    fn toggle(&mut self, x: u32, y: u32) {
+    /// Live-Vorschau einer Sim-Stunde auf einer Lager-Kopie — speist die
+    /// Netto-Raten (+x/h) und den Energie-Balken, ohne den Zustand zu ändern.
+    fn preview(&self) -> (Stockpile, StepReport) {
+        let mut s = self.stock.clone();
+        let rep = gamecore::resolve_step(&self.grid, &mut s, self.orbit_radius_km, 3_600.0);
+        (s, rep)
+    }
+
+    /// Platziert ein bestimmtes Gebäude (Gelände/Belegung/Budget vorausgesetzt).
+    fn build(&mut self, x: u32, y: u32, kind: BuildingKind) {
         let Some(tile) = self.grid.tile(x, y).copied() else {
             return;
         };
-
-        if let Some(existing) = tile.building {
-            self.grid.remove(x, y);
-            refund(&mut self.stock, existing.kind.spec().build_cost);
-            self.log
-                .push(format!("Abgerissen: {} @ ({x},{y})", name(existing.kind)));
+        if tile.building.is_some() {
             return;
         }
-
-        let kind = self.selected;
         if !kind.can_build_on(tile.terrain) {
             self.log
                 .push(format!("{}: falsches Gelände @ ({x},{y})", name(kind)));
@@ -157,6 +153,23 @@ impl BuildApp {
         pay(&mut self.stock, cost);
         let _ = self.grid.place(x, y, Building::new(kind));
         self.log.push(format!("Gebaut: {} @ ({x},{y})", name(kind)));
+    }
+
+    /// Reißt das Gebäude an `(x, y)` ab (volle Kostenerstattung).
+    fn demolish(&mut self, x: u32, y: u32) {
+        if let Some(b) = self.grid.remove(x, y) {
+            refund(&mut self.stock, b.kind.spec().build_cost);
+            self.log
+                .push(format!("Abgerissen: {} @ ({x},{y})", name(b.kind)));
+        }
+    }
+
+    /// Schaltet ein Gebäude ein/aus.
+    fn set_enabled(&mut self, x: u32, y: u32, on: bool) {
+        if self.grid.set_enabled(x, y, on) {
+            let what = if on { "Eingeschaltet" } else { "Ausgeschaltet" };
+            self.log.push(format!("{what} @ ({x},{y})"));
+        }
     }
 }
 
@@ -187,7 +200,7 @@ impl eframe::App for BuildApp {
         match view {
             View::Build => {
                 self.show_build_side(ctx, &mut selected);
-                self.show_build_grid(ctx, &mut actions);
+                self.show_build_grid(ctx, selected, &mut actions);
             }
             View::System => {
                 self.show_system_side(ctx);
@@ -202,7 +215,9 @@ impl eframe::App for BuildApp {
         for a in actions {
             match a {
                 Action::Step(dt) => self.step(dt),
-                Action::Toggle(x, y) => self.toggle(x, y),
+                Action::Build(x, y, kind) => self.build(x, y, kind),
+                Action::Demolish(x, y) => self.demolish(x, y),
+                Action::SetEnabled(x, y, on) => self.set_enabled(x, y, on),
             }
         }
 
@@ -226,25 +241,47 @@ impl BuildApp {
                     ui.selectable_value(selected, kind, label);
                 }
 
+                // Live-Vorschau (1 Sim-Stunde): Netto-Raten und Energie-Bilanz.
+                let (preview, rep) = self.preview();
+
                 ui.separator();
                 ui.heading("Lager");
-                egui::Grid::new("stock").striped(true).show(ui, |ui| {
+                egui::Grid::new("stock").striped(true).num_columns(3).show(ui, |ui| {
                     for r in Resource::ALL {
                         ui.label(format!("{r:?}"));
                         ui.label(format!("{:.0}", self.stock.get(r)));
+                        // Netto-Änderung über die nächste Sim-Stunde.
+                        let rate = preview.get(r) - self.stock.get(r);
+                        let (txt, col) = rate_label(rate);
+                        ui.colored_label(col, txt);
                         ui.end_row();
                     }
                 });
 
                 ui.separator();
-                if let Some(rep) = self.last_report {
-                    let status = if rep.energy_satisfied() { "gedeckt" } else { "KNAPP" };
-                    ui.label(format!(
-                        "Energie: {:.1} / {:.1} ({status})",
-                        rep.energy_supply, rep.energy_demand
-                    ));
+                ui.heading("Energie");
+                let supply = rep.energy_supply;
+                let demand = rep.energy_demand;
+                let frac = if supply > 0.0 {
+                    (demand / supply).min(1.0)
+                } else if demand > 0.0 {
+                    1.0
                 } else {
-                    ui.label("Energie: — (noch kein Schritt)");
+                    0.0
+                };
+                let ok = rep.energy_satisfied();
+                let fill = if ok {
+                    egui::Color32::from_rgb(80, 170, 90)
+                } else {
+                    egui::Color32::from_rgb(200, 70, 70)
+                };
+                ui.add(
+                    egui::ProgressBar::new(frac as f32)
+                        .fill(fill)
+                        .text(format!("Verbrauch {demand:.1} / {supply:.1} /s")),
+                );
+                if !ok {
+                    ui.colored_label(fill, "KNAPP — Produktion gedrosselt");
                 }
 
                 ui.separator();
@@ -255,45 +292,98 @@ impl BuildApp {
             });
     }
 
-    fn show_build_grid(&self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+    fn show_build_grid(&self, ctx: &egui::Context, selected: BuildingKind, actions: &mut Vec<Action>) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.label("Linksklick: bauen · Klick auf Gebäude: abreißen · Adjazenz im Tooltip");
+            ui.label(format!(
+                "Linksklick: {} bauen / abreißen · Rechtsklick: Menü",
+                name(selected)
+            ));
             ui.add_space(6.0);
             let cell = egui::vec2(56.0, 56.0);
             for y in 0..self.grid.height {
                 ui.horizontal(|ui| {
                     for x in 0..self.grid.width {
                         let tile = self.grid.tile(x, y).copied().unwrap();
-                        let text = tile.building.map(|b| short(b.kind)).unwrap_or("");
-                        let btn = egui::Button::new(egui::RichText::new(text).strong())
+                        // Gebäude-Kürzel; ausgeschaltet → ausgegraut.
+                        let (text, text_col) = match tile.building {
+                            Some(b) if b.enabled => (short(b.kind), egui::Color32::WHITE),
+                            Some(b) => (short(b.kind), egui::Color32::from_gray(120)),
+                            None => ("", egui::Color32::WHITE),
+                        };
+                        let btn = egui::Button::new(egui::RichText::new(text).strong().color(text_col))
                             .fill(terrain_color(tile.terrain))
                             .min_size(cell);
                         let resp = ui
                             .add_sized(cell, btn)
                             .on_hover_text(self.tile_tooltip(x, y, &tile));
+
+                        // Linksklick: schnelle Aktion (bauen / abreißen).
                         if resp.clicked() {
-                            actions.push(Action::Toggle(x, y));
+                            match tile.building {
+                                Some(_) => actions.push(Action::Demolish(x, y)),
+                                None => actions.push(Action::Build(x, y, selected)),
+                            }
                         }
+
+                        // Rechtsklick: Kontextmenü.
+                        resp.context_menu(|ui| match tile.building {
+                            None => {
+                                ui.label(terrain_name(tile.terrain));
+                                ui.menu_button("Bauen", |ui| {
+                                    let mut any = false;
+                                    for kind in PALETTE {
+                                        if kind.can_build_on(tile.terrain) {
+                                            any = true;
+                                            let label = format!(
+                                                "{}  ({})",
+                                                name(kind),
+                                                cost_string(kind.spec().build_cost)
+                                            );
+                                            if ui.button(label).clicked() {
+                                                actions.push(Action::Build(x, y, kind));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    }
+                                    if !any {
+                                        ui.label("(kein Gebäude für dieses Gelände)");
+                                    }
+                                });
+                            }
+                            Some(b) => {
+                                ui.label(name(b.kind));
+                                let toggle = if b.enabled { "Ausschalten" } else { "Einschalten" };
+                                if ui.button(toggle).clicked() {
+                                    actions.push(Action::SetEnabled(x, y, !b.enabled));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Abreißen").clicked() {
+                                    actions.push(Action::Demolish(x, y));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                     }
                 });
             }
         });
     }
 
-    /// Tooltip einer Kachel inkl. aktuellem Adjazenz-Multiplikator.
+    /// Tooltip einer Kachel inkl. Zustand und aktuellem Adjazenz-Multiplikator.
     fn tile_tooltip(&self, x: u32, y: u32, tile: &gamecore::Tile) -> String {
         match tile.building {
             Some(b) => {
-                let mult = self.grid.adjacency_multiplier(x, y);
+                let state = if b.enabled { "" } else { " — aus" };
                 if b.kind.spec().output.is_some() {
+                    let mult = self.grid.adjacency_multiplier(x, y);
                     format!(
-                        "{} auf {}\nAdjazenz ×{:.2}",
+                        "{}{state} auf {}\nAdjazenz ×{:.2}",
                         name(b.kind),
                         terrain_name(tile.terrain),
                         mult
                     )
                 } else {
-                    format!("{} auf {}", name(b.kind), terrain_name(tile.terrain))
+                    format!("{}{state} auf {}", name(b.kind), terrain_name(tile.terrain))
                 }
             }
             None => terrain_name(tile.terrain).to_string(),
@@ -499,6 +589,23 @@ fn body_color(kind: BodyKind) -> egui::Color32 {
         BodyKind::Icy => egui::Color32::from_rgb(160, 200, 220),
         BodyKind::Moon => egui::Color32::from_rgb(160, 160, 170),
         BodyKind::Asteroid => egui::Color32::from_rgb(120, 120, 120),
+    }
+}
+
+/// Beschriftung + Farbe für eine Netto-Rate pro Stunde (`+x/h` grün, `-x/h` rot).
+fn rate_label(rate_per_hour: f64) -> (String, egui::Color32) {
+    if rate_per_hour.abs() < 0.5 {
+        ("0/h".to_string(), egui::Color32::from_gray(120))
+    } else if rate_per_hour > 0.0 {
+        (
+            format!("+{:.0}/h", rate_per_hour),
+            egui::Color32::from_rgb(90, 180, 100),
+        )
+    } else {
+        (
+            format!("{:.0}/h", rate_per_hour),
+            egui::Color32::from_rgb(200, 90, 80),
+        )
     }
 }
 

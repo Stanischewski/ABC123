@@ -53,6 +53,9 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
 
     let mut energy_supply = 0.0;
     for (_, _, b) in grid.buildings() {
+        if !b.enabled {
+            continue;
+        }
         let spec = b.kind.spec();
         if spec.solar {
             energy_supply += spec.energy_output * solar_factor;
@@ -76,6 +79,9 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // Rasterposition, um nach der Zuteilung die Rate zu berechnen.
     let mut consumers: Vec<(u32, u32, EnergyDemand)> = Vec::new();
     for (x, y, b) in grid.buildings() {
+        if !b.enabled {
+            continue;
+        }
         let spec = b.kind.spec();
         if spec.output.is_some() && spec.energy_demand > 0.0 {
             consumers.push((
@@ -104,6 +110,9 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
     for tier in [Tier::Raw, Tier::Refined, Tier::Gate] {
         for (x, y, b) in grid.buildings() {
+            if !b.enabled {
+                continue;
+            }
             let spec = b.kind.spec();
             let Some(output) = spec.output else { continue };
             if output.tier() != tier {
@@ -269,6 +278,38 @@ mod tests {
         let r_far = resolve_step(&g, &mut far, AU * 2.0, 1.0);
         assert!((r_near.energy_supply - 10.0).abs() < 1e-6);
         assert!((r_far.energy_supply - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn disabled_building_is_inert() {
+        // Mine + Solar, aber der Solarkollektor ist ausgeschaltet → keine
+        // Energie → die Mine fördert nichts.
+        let mut g = Grid::new(2, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        assert!(g.set_enabled(1, 0, false));
+        let mut stock = Stockpile::new();
+        let report = resolve_step(&g, &mut stock, AU, 100.0);
+        assert_eq!(report.energy_supply, 0.0);
+        assert_eq!(stock.get(Resource::Metals), 0.0);
+
+        // Wieder eingeschaltet → Förderung läuft.
+        let mut g2 = g.clone();
+        assert!(g2.set_enabled(1, 0, true));
+        let mut stock2 = Stockpile::new();
+        resolve_step(&g2, &mut stock2, AU, 100.0);
+        assert!((stock2.get(Resource::Metals) - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn disabled_depot_grants_no_adjacency() {
+        let mut g = Grid::new(2, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::Depot)).unwrap();
+        assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
+        g.set_enabled(1, 0, false);
+        assert!((g.adjacency_multiplier(0, 0) - 1.0).abs() < 1e-9);
     }
 
     #[test]

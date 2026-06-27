@@ -190,21 +190,37 @@ impl BuildingKind {
     }
 }
 
+fn default_enabled() -> bool {
+    true
+}
+
 /// Eine platzierte Struktur samt Drossel-Priorität (höher = wird bei
-/// Energie-/Input-Knappheit zuerst bedient).
+/// Energie-/Input-Knappheit zuerst bedient) und Ein/Aus-Schalter. Ein
+/// ausgeschaltetes Gebäude ist inert: es produziert nichts, verbraucht keine
+/// Energie und trägt keinen Adjazenz-Bonus bei.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Building {
     pub kind: BuildingKind,
     pub priority: i32,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 impl Building {
     pub fn new(kind: BuildingKind) -> Self {
-        Building { kind, priority: 0 }
+        Building {
+            kind,
+            priority: 0,
+            enabled: true,
+        }
     }
 
     pub fn with_priority(kind: BuildingKind, priority: i32) -> Self {
-        Building { kind, priority }
+        Building {
+            kind,
+            priority,
+            enabled: true,
+        }
     }
 }
 
@@ -291,7 +307,19 @@ impl Grid {
         self.tiles[i].building.take()
     }
 
+    /// Schaltet ein Gebäude ein oder aus. Gibt `true` bei Erfolg.
+    pub fn set_enabled(&mut self, x: u32, y: u32, enabled: bool) -> bool {
+        if let Some(i) = self.index(x, y) {
+            if let Some(b) = &mut self.tiles[i].building {
+                b.enabled = enabled;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Die orthogonalen Nachbar-Gebäude von `(x, y)` (4er-Nachbarschaft).
+    /// Ausgeschaltete Gebäude zählen nicht (sie sind inert).
     pub fn neighbor_buildings(&self, x: u32, y: u32) -> Vec<BuildingKind> {
         let mut out = Vec::new();
         let deltas: [(i64, i64); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
@@ -303,7 +331,9 @@ impl Grid {
             }
             if let Some(tile) = self.tile(nx as u32, ny as u32) {
                 if let Some(b) = tile.building {
-                    out.push(b.kind);
+                    if b.enabled {
+                        out.push(b.kind);
+                    }
                 }
             }
         }
