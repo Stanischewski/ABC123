@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::economy::Stockpile;
 use crate::resource::Resource;
 
+/// Adjazenz-Bonus je unterstützendem Nachbarn (+10 %).
+pub const ADJACENCY_PER_NEIGHBOR: f64 = 0.10;
+/// Obergrenze des Adjazenz-Multiplikators (würzt, dominiert nicht).
+pub const ADJACENCY_CAP: f64 = 1.5;
+
 /// Geländeprofil einer Kachel. Bindet Rohstoffe an Orte (DESIGN.md §4.1):
 /// jeder Rohstoff hängt an *einem* Gelände, damit Förder-Platzierung zählt und
 /// Planeten unterschiedliche Profile bekommen.
@@ -467,28 +472,37 @@ impl Grid {
     /// benachbarten Förderer, der einen ihrer Eingänge liefert (Kolokation).
     /// Gedeckelt, damit Adjazenz würzt, aber nicht dominiert.
     pub fn adjacency_multiplier(&self, x: u32, y: u32) -> f64 {
-        const PER_NEIGHBOR: f64 = 0.10;
-        const CAP: f64 = 1.5;
+        let bonus: f64 = self
+            .adjacency_contributions(x, y)
+            .iter()
+            .map(|(_, b)| *b)
+            .sum();
+        (1.0 + bonus).min(ADJACENCY_CAP)
+    }
 
+    /// Die einzelnen Adjazenz-Beiträge der Nachbarn als `(Nachbar, Bonus)` —
+    /// für die Aufschlüsselung in der UI. Die Summe (gedeckelt) ergibt den
+    /// Multiplikator aus [`adjacency_multiplier`](Self::adjacency_multiplier).
+    pub fn adjacency_contributions(&self, x: u32, y: u32) -> Vec<(BuildingKind, f64)> {
+        let mut out = Vec::new();
         let Some(building) = self.tile(x, y).and_then(|t| t.building) else {
-            return 1.0;
+            return out;
         };
         let Some(output) = building.kind.spec().output else {
-            return 1.0;
+            return out;
         };
         let recipe_inputs = output.recipe().map(|r| r.inputs).unwrap_or(&[]);
 
-        let mut bonus = 0.0;
         for neighbor in self.neighbor_buildings(x, y) {
             if neighbor == BuildingKind::Depot {
-                bonus += PER_NEIGHBOR;
+                out.push((neighbor, ADJACENCY_PER_NEIGHBOR));
             } else if let Some(nout) = neighbor.spec().output {
                 if recipe_inputs.iter().any(|(r, _)| *r == nout) {
-                    bonus += PER_NEIGHBOR;
+                    out.push((neighbor, ADJACENCY_PER_NEIGHBOR));
                 }
             }
         }
-        (1.0 + bonus).min(CAP)
+        out
     }
 }
 
@@ -548,6 +562,21 @@ mod tests {
         g.place(1, 0, Building::new(BuildingKind::Smelter)).unwrap();
         // Smelter zieht Bonus aus der benachbarten Metallquelle.
         assert!((g.adjacency_multiplier(1, 0) - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adjacency_contributions_list_each_neighbour() {
+        // Smelter zwischen Mine (Input-Quelle) und Lager → zwei Beiträge.
+        let mut g = Grid::new(3, 1, Terrain::Barren);
+        g.set_terrain(0, 0, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::Smelter)).unwrap();
+        g.place(2, 0, Building::new(BuildingKind::Depot)).unwrap();
+        let contribs = g.adjacency_contributions(1, 0);
+        assert_eq!(contribs.len(), 2);
+        // Summe entspricht (Multiplikator − 1).
+        let sum: f64 = contribs.iter().map(|(_, b)| b).sum();
+        assert!((sum - (g.adjacency_multiplier(1, 0) - 1.0)).abs() < 1e-9);
     }
 
     #[test]

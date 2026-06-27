@@ -137,14 +137,57 @@ impl BuildApp {
         let _ = gamecore::advance(&mut self.grid, &mut self.stock, self.orbit_radius_km, dt);
     }
 
-    /// Live-Vorschau einer Sim-Stunde auf Kopien von Raster und Lager — speist
-    /// die Netto-Raten (+x/h) und den Energie-Balken, ohne den Zustand zu
-    /// ändern. Berücksichtigt auch den Materialzug laufender Baustellen.
-    fn preview(&self) -> (Stockpile, StepReport) {
-        let mut g = self.grid.clone();
+    /// Netto-Raten je Ressource (pro Stunde, ausgerichtet auf `Resource::ALL`)
+    /// und Energie-Bericht für ein gegebenes Raster — über eine 1-Stunden-
+    /// Vorschau auf Kopien, ohne den echten Zustand zu ändern. Berücksichtigt
+    /// auch den Materialzug laufender Baustellen.
+    fn grid_rates(&self, grid: &Grid) -> (Vec<f64>, StepReport) {
+        let mut g = grid.clone();
         let mut s = self.stock.clone();
         let rep = gamecore::advance(&mut g, &mut s, self.orbit_radius_km, 3_600.0);
-        (s, rep)
+        let rates = Resource::ALL
+            .iter()
+            .map(|r| s.get(*r) - self.stock.get(*r))
+            .collect();
+        (rates, rep)
+    }
+
+    /// Projizierte Auswirkung, wenn `kind` an `(x, y)` gebaut würde — die
+    /// *eingeschwungene* Änderung von Einkommen und Energie (das Gebäude sofort
+    /// betriebsbereit gedacht), gegen den aktuellen Zustand.
+    fn placement_tooltip(&self, x: u32, y: u32, kind: BuildingKind) -> String {
+        let (base, base_rep) = self.grid_rates(&self.grid);
+        let mut g = self.grid.clone();
+        let _ = g.place(x, y, Building::new(kind));
+        let (hyp, hyp_rep) = self.grid_rates(&g);
+
+        let mut s = format!(
+            "Bauen: {} ({})\n— Auswirkung (eingeschwungen) —",
+            name(kind),
+            cost_string(kind.spec().build_cost)
+        );
+        let mut any = false;
+        for (i, r) in Resource::ALL.iter().enumerate() {
+            let d = hyp[i] - base[i];
+            if d.abs() > 0.5 {
+                s.push_str(&format!("\n{r:?} {d:+.0}/h"));
+                any = true;
+            }
+        }
+        let ds = hyp_rep.energy_supply - base_rep.energy_supply;
+        let dd = hyp_rep.energy_demand - base_rep.energy_demand;
+        if ds.abs() > 0.05 {
+            s.push_str(&format!("\nEnergie-Angebot {ds:+.1}/s"));
+            any = true;
+        }
+        if dd.abs() > 0.05 {
+            s.push_str(&format!("\nEnergie-Bedarf {dd:+.1}/s"));
+            any = true;
+        }
+        if !any {
+            s.push_str("\n(noch keine Wirkung — evtl. fehlt Energie oder Input)");
+        }
+        s
     }
 
     /// Setzt eine Baustelle (kein Einmalkauf — Material fließt über die Bauzeit).
@@ -267,17 +310,16 @@ impl BuildApp {
                 }
 
                 // Live-Vorschau (1 Sim-Stunde): Netto-Raten und Energie-Bilanz.
-                let (preview, rep) = self.preview();
+                let (rates, rep) = self.grid_rates(&self.grid);
 
                 ui.separator();
                 ui.heading("Lager");
                 egui::Grid::new("stock").striped(true).num_columns(3).show(ui, |ui| {
-                    for r in Resource::ALL {
+                    for (i, r) in Resource::ALL.iter().enumerate() {
                         ui.label(format!("{r:?}"));
-                        ui.label(format!("{:.0}", self.stock.get(r)));
+                        ui.label(format!("{:.0}", self.stock.get(*r)));
                         // Netto-Änderung über die nächste Sim-Stunde.
-                        let rate = preview.get(r) - self.stock.get(r);
-                        let (txt, col) = rate_label(rate);
+                        let (txt, col) = rate_label(rates[i]);
                         ui.colored_label(col, txt);
                         ui.end_row();
                     }
@@ -343,9 +385,21 @@ impl BuildApp {
                         let btn = egui::Button::new(egui::RichText::new(text).strong().color(text_col))
                             .fill(terrain_color(tile.terrain))
                             .min_size(cell);
-                        let resp = ui
-                            .add_sized(cell, btn)
-                            .on_hover_text(self.tile_tooltip(x, y, &tile));
+                        let resp = ui.add_sized(cell, btn);
+                        // Tooltip nur fürs gehoverte Feld berechnen (sonst teuer):
+                        // belegt → Gebäude-Info; leer & baubar → Platzierungs-Vorschau.
+                        let resp = if resp.hovered() {
+                            let tip = match tile.building {
+                                Some(_) => self.tile_tooltip(x, y, &tile),
+                                None if selected.can_build_on(tile.terrain) => {
+                                    self.placement_tooltip(x, y, selected)
+                                }
+                                None => terrain_name(tile.terrain).to_string(),
+                            };
+                            resp.on_hover_text(tip)
+                        } else {
+                            resp
+                        };
 
                         // Linksklick: schnelle Aktion (bauen / abreißen).
                         if resp.clicked() {
@@ -416,6 +470,37 @@ impl BuildApp {
                                         },
                                     );
                                 }
+                                // Info: Boni und Abzüge aufgeschlüsselt.
+                                ui.menu_button("Info", |ui| {
+                                    let spec = b.kind.spec();
+                                    if let Some(out) = spec.output {
+                                        ui.label(format!("Basis: {:.2}/s → {out:?}", spec.base_rate));
+                                        let mult = self.grid.adjacency_multiplier(x, y);
+                                        ui.label(format!("Adjazenz: ×{mult:.2}"));
+                                        let contribs = self.grid.adjacency_contributions(x, y);
+                                        if contribs.is_empty() {
+                                            ui.label("   (keine Nachbar-Boni)");
+                                        } else {
+                                            for (k, bonus) in contribs {
+                                                ui.label(format!("   +{:.0}%  {}", bonus * 100.0, name(k)));
+                                            }
+                                        }
+                                        ui.label(format!("Effektiv: {:.2}/s", spec.base_rate * mult));
+                                    }
+                                    if spec.energy_demand > 0.0 {
+                                        ui.label(format!("Energiebedarf: −{:.1}/s", spec.energy_demand));
+                                    }
+                                    if spec.energy_output > 0.0 {
+                                        let note = if spec.solar {
+                                            "  (×1/r²)"
+                                        } else if spec.fuel_rate > 0.0 {
+                                            "  (frisst Gas)"
+                                        } else {
+                                            ""
+                                        };
+                                        ui.label(format!("Energie: +{:.1}/s{note}", spec.energy_output));
+                                    }
+                                });
                                 if ui.button("Abreißen").clicked() {
                                     actions.push(Action::Demolish(x, y));
                                     ui.close_menu();

@@ -65,7 +65,10 @@ async fn main() {
             (default_system, 0.0, None)
         }
         Err(e) => {
-            tracing::error!("DB nicht erreichbar: {e}. Laufe ohne Persistenz (im Speicher).");
+            tracing::warn!(
+                "Postgres nicht erreichbar ({e}). Läuft Postgres? In WSL z. B. \
+                 `wsl sudo service postgresql start`. Server läuft ohne Persistenz weiter."
+            );
             (default_system, 0.0, None)
         }
     };

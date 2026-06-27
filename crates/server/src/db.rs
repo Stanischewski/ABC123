@@ -5,12 +5,18 @@
 //! Sim-Zeit). Fehlt sie, läuft das Skelett wie bisher rein im Speicher — damit
 //! bleibt das Repo ohne lokale DB lauffähig.
 
+use std::time::Duration;
+
 use gamecore::System;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
 /// Stellt eine Verbindung her, sofern `DATABASE_URL` gesetzt ist, und wendet die
 /// Migrationen an. `Ok(None)` bedeutet „keine DB konfiguriert" (kein Fehler).
+///
+/// Bei nicht erreichbarer DB schlägt es nach einem **kurzen** Timeout fehl,
+/// statt minutenlang zu hängen — der Aufrufer fällt dann auf den Speicherbetrieb
+/// zurück, und der Server startet trotzdem zügig.
 pub async fn connect_and_migrate() -> Result<Option<PgPool>, sqlx::Error> {
     let url = match std::env::var("DATABASE_URL") {
         Ok(u) if !u.trim().is_empty() => u,
@@ -19,6 +25,8 @@ pub async fn connect_and_migrate() -> Result<Option<PgPool>, sqlx::Error> {
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
+        // Schnell scheitern, wenn Postgres nicht läuft (Default wäre 30 s).
+        .acquire_timeout(Duration::from_secs(4))
         .connect(&url)
         .await?;
 
