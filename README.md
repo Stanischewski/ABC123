@@ -39,7 +39,7 @@ Das Workspace-Gerüst (Phase 0) steht:
 └── crates/
     ├── core/           # Spielregeln, Kepler, geteilte Typen (Server + Client)
     ├── server/         # Axum, autoritative Simulation (Postgres folgt)
-    └── client/         # Skelett auf core (egui/Bevy folgen in Phase 1/2)
+    └── client/         # egui/eframe-Bau-Ebene (Bevy-Systemansicht folgt Phase 2)
 ```
 
 Die Crate `core` ist als `gamecore` eingebunden, damit ihr Name nicht Rusts
@@ -56,8 +56,10 @@ std-`core` verdeckt. Umgesetzt:
   Bahnradius gekoppeltem Solarertrag (`1/r²`). Alles deterministisch und getestet.
 - **`server`** — Axum + optionale Postgres-Persistenz: `GET /health`,
   `GET /system` (Zustand als JSON), `GET /ws` (WebSocket-Stream der Positionen).
-- **`client`** — Binary, das den geteilten Kern nutzt: propagiert Positionen
-  *selbst*, baut eine Demo-Starterbasis und simuliert einen Produktions-Schritt.
+- **`client`** — egui/eframe-Oberfläche der Bau-Ebene: Planeten-Raster mit
+  Gelände-Farben, Gebäude-Palette, Bauen/Abreißen per Klick, Lager-/Energie-
+  Anzeige und Simulations-Schritte (+1 h / +1 Tag / Auto-Tick). Die gesamte
+  Logik liegt im geteilten Kern — der Client stellt nur dar.
  
 ## Bauen & Ausführen
 
@@ -74,12 +76,12 @@ cargo run -p abc123-server
 #   GET /system   → Systemzustand als JSON
 #   GET /ws       → WebSocket-Stream der Körperpositionen
 
-# Client-Skelett (gibt System, Propagation und Ressourcenbaum aus)
+# Client: egui-Oberfläche der Bau-Ebene (öffnet ein Fenster)
 cargo run -p abc123-client
 ```
 
-Die browserbasierte Oberfläche (egui, später Bevy via `trunk serve`) kommt mit
-Phase 1/2 hinzu.
+Der Client läuft derzeit als natives Desktop-Fenster. Das Wasm-Browser-Target
+(`trunk serve`) und die Bevy-Systemansicht kommen in einer späteren Phase hinzu.
 
 ### Datenbank (PostgreSQL in WSL)
 
