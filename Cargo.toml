@@ -1,0 +1,32 @@
+# Workspace-Manifest — siehe README.md §Projektstruktur und docs/DESIGN.md §5.
+#
+# Phase 0 (Fundament): Core-Crate, Server-Skelett, Client-Skelett.
+# Der autoritative Simulationskern lebt in `core` und wird von Server *und*
+# Client geteilt (DESIGN.md §5.6).
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/server",
+    "crates/client",
+]
+
+# Gemeinsame Metadaten und Abhängigkeitsversionen für alle Crates.
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+authors = ["Stanischewski Sebastian"]
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Als `gamecore` aliasiert, damit der Crate-Name nicht Rusts std `core` verdeckt
+# (sonst kollidiert z. B. das `#[tokio::main]`-Makro). Ordner bleibt `crates/core`.
+gamecore = { path = "crates/core", package = "abc123-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Etwas kleinere, schnellere Release-Builds; für ein Spiel sinnvoll.
+[profile.release]
+opt-level = 3
+lto = "thin"

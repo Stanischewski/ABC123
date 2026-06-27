@@ -1,0 +1,26 @@
+# Server-Crate — autoritative Simulation, HTTP/WebSocket-API.
+#
+# Phase 0: lauffähiges Skelett (Health-Endpoint + WebSocket, der den
+# geteilten Welt-Zustand aus `core` tickt und streamt). Postgres-Anbindung
+# folgt, sobald persistenter Zustand gebraucht wird (DESIGN.md §6, Phase 0/1).
+[package]
+name = "abc123-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Axum-basierter, server-autoritativer Simulations-Server."
+
+[[bin]]
+name = "abc123-server"
+path = "src/main.rs"
+
+[dependencies]
+gamecore = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

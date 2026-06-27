@@ -1,0 +1,22 @@
+# Core-Crate — geteilte Spielregeln, Kepler-Mathematik und Typen.
+# Von Server *und* Client genutzt (DESIGN.md §5.6). Bewusst ohne schwere
+# Abhängigkeiten, damit sie auch nach Wasm sauber kompiliert.
+[package]
+name = "abc123-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Geteilter, deterministischer Simulationskern: Kepler-Orbits, Ressourcen, Ökonomie."
+
+# Lib-Name = `abc123_core` (Standard aus dem Paketnamen). Über die
+# Workspace-Abhängigkeit wird sie als `gamecore` eingebunden.
+[lib]
+name = "abc123_core"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

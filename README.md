@@ -25,9 +25,9 @@ Leitidee: **langsam und asynchron**. Befehle dauern Minuten bis Stunden, nicht S
 - **Ziel:** Browser (WebAssembly); Desktop-Binary nahezu geschenkt
 - **Gemeinsame `core`-Crate:** Spielregeln, Kepler-Mathematik, Serialisierung — von Server *und* Client genutzt
 ## Projektstruktur
- 
-(geplant)
- 
+
+Das Workspace-Gerüst (Phase 0) steht:
+
 ```
 .
 ├── README.md
@@ -38,24 +38,43 @@ Leitidee: **langsam und asynchron**. Befehle dauern Minuten bis Stunden, nicht S
 │   └── Oekonomie-und-System-Ebene.md  # Vertiefung: Ökonomie, Logistik, System-Ebene
 └── crates/
     ├── core/           # Spielregeln, Kepler, geteilte Typen (Server + Client)
-    ├── server/         # Axum, autoritative Simulation, Postgres
-    └── client/         # Bevy + egui, Wasm-Ziel
+    ├── server/         # Axum, autoritative Simulation (Postgres folgt)
+    └── client/         # Skelett auf core (egui/Bevy folgen in Phase 1/2)
 ```
+
+Die Crate `core` ist als `gamecore` eingebunden, damit ihr Name nicht Rusts
+std-`core` verdeckt. Was in Phase 0 bereits umgesetzt ist:
+
+- **`core`** — Kepler-Propagation auf festen Bahnen (planar, Newton-Raphson),
+  Körper-Hierarchie (Mond ⊂ Planet ⊂ Stern), das Ressourcenmodell (3 + 2 + 1),
+  Energiebudget mit Priorität, Logistik-Effizienz (`min(1, Angebot/Bedarf)`) und
+  die Produktionsrate-Formel — durchgehend mit Unit-Tests.
+- **`server`** — Axum-Skelett: `GET /health`, `GET /system` (Zustand als JSON)
+  und `GET /ws` (WebSocket, der die Weltzeit tickt und Körperpositionen streamt).
+- **`client`** — minimales Binary, das den geteilten Kern nutzt und Positionen
+  *selbst* propagiert (der Beweis für das geteilte, deterministische Modell).
  
 ## Bauen & Ausführen
- 
-Sobald das Workspace-Gerüst steht (Phase 0):
- 
+
+Voraussetzung: eine aktuelle Rust-Toolchain (`rustup`, Edition 2021).
+
 ```bash
-# Server + Tests
+# Alles bauen und die Tests des Kerns laufen lassen
 cargo build
 cargo test
- 
-# Client im Browser (Beispiel mit trunk)
-trunk serve
+
+# Server starten (lauscht auf http://127.0.0.1:8080)
+cargo run -p abc123-server
+#   GET /health   → "ok"
+#   GET /system   → Systemzustand als JSON
+#   GET /ws       → WebSocket-Stream der Körperpositionen
+
+# Client-Skelett (gibt System, Propagation und Ressourcenbaum aus)
+cargo run -p abc123-client
 ```
- 
-Bis dahin enthält das Repo nur die Design-Dokumentation.
+
+Die browserbasierte Oberfläche (egui, später Bevy via `trunk serve`) kommt mit
+Phase 1/2 hinzu.
  
 ## Dokumentation
  

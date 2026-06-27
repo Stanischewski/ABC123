@@ -1,0 +1,24 @@
+# Client-Crate — Darstellung & Eingabe.
+#
+# Phase 0: ein minimales, lauffähiges Skelett, das den geteilten `core`-Kern
+# nutzt und Körperpositionen *selbst* propagiert (DESIGN.md §5.6) — der Beweis,
+# dass dieselbe Simulation client-seitig läuft.
+#
+# Ab Phase 1 kommt die egui-basierte Bau- und schematische Systemansicht hinzu,
+# ab Phase 2 die Bevy-Renderung der vollen Kepler-Simulation (DESIGN.md §5.2).
+# Beides bleibt bewusst draußen, solange das Fundament gelegt wird.
+[package]
+name = "abc123-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Client-Skelett: nutzt den geteilten Simulationskern."
+
+[[bin]]
+name = "abc123-client"
+path = "src/main.rs"
+
+[dependencies]
+gamecore = { workspace = true }
