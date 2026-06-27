@@ -22,7 +22,11 @@ path = "src/main.rs"
 
 [dependencies]
 gamecore = { workspace = true }
-# egui/eframe trägt die Bau- und Verwaltungs-Ebene (DESIGN.md §5.2). Nativ jetzt;
-# dieselbe Crate kann später nach Wasm (trunk) gebaut werden.
+# egui/eframe trägt die Bau- und Verwaltungs-Ebene (DESIGN.md §5.2). Läuft nativ
+# *und* im Browser (Wasm) aus derselben Quelle.
 eframe = "0.28"
 egui = "0.28"
+
+# Nur fürs Browser-Ziel (Wasm): treibt den asynchronen eframe-Start an.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"

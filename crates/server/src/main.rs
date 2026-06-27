@@ -22,6 +22,7 @@ use gamecore::{SimClock, System};
 use serde::Serialize;
 use sqlx::PgPool;
 use tokio::sync::Mutex;
+use tower_http::services::ServeDir;
 
 mod db;
 
@@ -75,14 +76,21 @@ async fn main() {
         db,
     });
 
+    // Verzeichnis der gebauten Browser-UI (trunk dist/). Per Env überschreibbar.
+    let dist = std::env::var("CLIENT_DIST")
+        .unwrap_or_else(|_| "crates/client/dist".to_string());
+    let serve_ui = ServeDir::new(&dist).append_index_html_on_directories(true);
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/system", get(get_system))
         .route("/ws", get(ws_upgrade))
-        .with_state(state);
+        .with_state(state)
+        // Alles Übrige (UI, Wasm, JS) aus dist/ ausliefern; "/" → index.html.
+        .fallback_service(serve_ui);
 
     let addr = "127.0.0.1:8080";
-    tracing::info!("Server lauscht auf http://{addr}");
+    tracing::info!("Server lauscht auf http://{addr} — UI aus '{dist}'");
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Port 8080 konnte nicht gebunden werden");

@@ -24,6 +24,9 @@ axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Liefert die gebaute Browser-UI (trunk dist/) als statische Dateien aus —
+# der Server ist damit auch der Webserver der UI.
+tower-http = { version = "0.5", features = ["fs", "trace"] }
 # Persistenz (DESIGN.md §5.2/§6, Phase 0 „Postgres-Grundlage"). rustls statt
 # nativem TLS, damit kein OpenSSL-Toolchain-Zwang auf Windows entsteht.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json", "migrate", "macros"] }

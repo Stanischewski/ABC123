@@ -61,7 +61,8 @@ std-`core` verdeckt. Umgesetzt:
   Adjazenz im Tooltip, Lager-/Energie-Anzeige) und die **schematische
   System-Ansicht** (Körper auf ihren Kepler-Bahnen als Marker, an die Sim-Zeit
   gekoppelt). Simulations-Schritte (+1 h / +1 Tag / Auto-Tick) bewegen beides.
-  Die gesamte Logik liegt im geteilten Kern — der Client stellt nur dar.
+  Die gesamte Logik liegt im geteilten Kern — der Client stellt nur dar. Läuft
+  nativ *und* im Browser (WebAssembly) aus derselben Quelle.
  
 ## Bauen & Ausführen
 
@@ -78,12 +79,41 @@ cargo run -p abc123-server
 #   GET /system   → Systemzustand als JSON
 #   GET /ws       → WebSocket-Stream der Körperpositionen
 
-# Client: egui-Oberfläche der Bau-Ebene (öffnet ein Fenster)
+# Client als natives Desktop-Fenster
 cargo run -p abc123-client
 ```
 
-Der Client läuft derzeit als natives Desktop-Fenster. Das Wasm-Browser-Target
-(`trunk serve`) und die Bevy-Systemansicht kommen in einer späteren Phase hinzu.
+### Im Browser (WebAssembly)
+
+Der Browser ist das primäre Ziel (DESIGN.md §5.1). Derselbe egui-Client wird per
+WebAssembly gebaut; der Axum-Server liefert ihn aus — er ist damit *auch* der
+Webserver der UI.
+
+Einmalig: das Wasm-Tooling.
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install trunk        # oder ein vorgebautes Binary von github.com/trunk-rs/trunk
+```
+
+Variante A — über den Server (UI und API unter einem Ursprung):
+
+```bash
+# UI nach crates/client/dist/ bauen …
+cd crates/client && trunk build && cd ../..
+# … und vom Server ausliefern: http://127.0.0.1:8080 öffnen
+cargo run -p abc123-server
+```
+
+Variante B — trunk-Dev-Server mit Hot-Reload (nur UI, ohne API):
+
+```bash
+cd crates/client && trunk serve   # http://127.0.0.1:8080 (trunk-eigener Port)
+```
+
+Das gebaute `dist/` ist gitignoriert; nach einem frischen Checkout also zuerst
+`trunk build`. Das Wasm-Bundle wird mit korrektem `application/wasm` ausgeliefert.
+Die Bevy-Systemansicht (volle Kepler-Simulation) kommt in Phase 2.
 
 ### Datenbank (PostgreSQL in WSL)
 

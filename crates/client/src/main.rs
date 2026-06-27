@@ -11,7 +11,11 @@
 //! Die gesamte Spiellogik liegt im Kern; diese Crate stellt nur dar und nimmt
 //! Eingaben entgegen. Nativ lauffähig; Wasm-Target (trunk) später.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Im Release nativ ohne Konsolenfenster (auf Wasm bedeutungslos → ausgeschlossen).
+#![cfg_attr(
+    all(not(debug_assertions), not(target_arch = "wasm32")),
+    windows_subsystem = "windows"
+)]
 
 use eframe::egui;
 use gamecore::{Building, BuildingKind, BodyKind, Grid, Resource, StepReport, Stockpile, System, Terrain};
@@ -29,6 +33,8 @@ const PALETTE: [BuildingKind; 9] = [
     BuildingKind::Depot,
 ];
 
+/// Nativer Einstiegspunkt (Desktop-Fenster).
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1000.0, 680.0]),
@@ -39,6 +45,22 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|_cc| Ok(Box::new(BuildApp::new()))),
     )
+}
+
+/// Browser-Einstiegspunkt (Wasm): hängt die App an die `<canvas>` in index.html.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    let web_options = eframe::WebOptions::default();
+    wasm_bindgen_futures::spawn_local(async {
+        eframe::WebRunner::new()
+            .start(
+                "the_canvas_id",
+                web_options,
+                Box::new(|_cc| Ok(Box::new(BuildApp::new()))),
+            )
+            .await
+            .expect("eframe konnte im Browser nicht starten");
+    });
 }
 
 /// Aktive Ansicht.

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>ABC123 — Phase 1</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #1e1e1e;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- eframe rendert in diese Canvas (siehe Wasm-main in src/main.rs). -->
+    <canvas id="the_canvas_id"></canvas>
+    <!-- trunk baut die Client-Crate nach Wasm und bindet sie hier ein. -->
+    <link data-trunk rel="rust" data-bin="abc123-client" />
+  </body>
+</html>
