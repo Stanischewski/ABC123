@@ -34,7 +34,7 @@ pub use economy::{allocate_energy, logistics_efficiency, EnergyDemand, Producer,
 pub use math::Vec2;
 pub use orbit::{OrbitalElements, MU_SUN};
 pub use planet::{Building, BuildingKind, BuildingSpec, Grid, PlaceError, Terrain, Tile};
-pub use production::{resolve_step, StepReport};
+pub use production::{advance, resolve_step, StepReport};
 pub use resource::{Recipe, Resource, Tier};
 pub use system::{Body, BodyId, BodyKind, System};
 pub use time::SimClock;

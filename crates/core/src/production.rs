@@ -53,7 +53,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
 
     let mut energy_supply = 0.0;
     for (_, _, b) in grid.buildings() {
-        if !b.enabled {
+        if !b.is_operational() {
             continue;
         }
         let spec = b.kind.spec();
@@ -79,7 +79,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // Rasterposition, um nach der Zuteilung die Rate zu berechnen.
     let mut consumers: Vec<(u32, u32, EnergyDemand)> = Vec::new();
     for (x, y, b) in grid.buildings() {
-        if !b.enabled {
+        if !b.is_operational() {
             continue;
         }
         let spec = b.kind.spec();
@@ -110,7 +110,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
     for tier in [Tier::Raw, Tier::Refined, Tier::Gate] {
         for (x, y, b) in grid.buildings() {
-            if !b.enabled {
+            if !b.is_operational() {
                 continue;
             }
             let spec = b.kind.spec();
@@ -152,6 +152,16 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
         energy_demand,
         dt,
     }
+}
+
+/// Ein voller Simulationsschritt: erst **Produktion** ([`resolve_step`]), dann
+/// **Baufortschritt** ([`Grid::advance_construction`]). Baustellen ziehen ihr
+/// Material aus demselben globalen Pool — die in diesem Schritt geförderten
+/// Stoffe stehen dem Bau bereits zur Verfügung.
+pub fn advance(grid: &mut Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt: f64) -> StepReport {
+    let report = resolve_step(&*grid, stock, orbit_radius_km, dt);
+    grid.advance_construction(stock, dt);
+    report
 }
 
 #[cfg(test)]
@@ -324,6 +334,25 @@ mod tests {
             sb.get(Resource::Electronics),
             sa.get(Resource::Electronics)
         );
+    }
+
+    #[test]
+    fn advance_produces_then_builds_from_same_pool() {
+        // Betriebsbereite Mine + Solar fördern Metalle; eine Depot-Baustelle
+        // wird im selben Schritt aus dem frisch geförderten Material fertig.
+        let mut g = Grid::new(3, 1, Terrain::Rock);
+        g.set_terrain(2, 0, Terrain::Barren);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        g.place(2, 0, Building::construction_site(BuildingKind::Depot))
+            .unwrap();
+
+        let mut stock = Stockpile::new();
+        // Eine Stunde: Mine ~3600 Metalle; Depot (3600 s, 30 Metalle) wird fertig.
+        advance(&mut g, &mut stock, AU, 3_600.0);
+        assert!(stock.get(Resource::Metals) > 3_000.0);
+        assert!(g.tile(2, 0).unwrap().building.unwrap().is_operational());
     }
 
     #[test]

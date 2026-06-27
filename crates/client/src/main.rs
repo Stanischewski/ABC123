@@ -128,24 +128,26 @@ impl BuildApp {
         }
     }
 
-    /// Schreibt die Simulation um `dt` Sekunden fort.
+    /// Schreibt die Simulation um `dt` Sekunden fort (Produktion + Baufortschritt).
     fn step(&mut self, dt: f64) {
         if dt <= 0.0 {
             return;
         }
         self.sim_time += dt;
-        let _ = gamecore::resolve_step(&self.grid, &mut self.stock, self.orbit_radius_km, dt);
+        let _ = gamecore::advance(&mut self.grid, &mut self.stock, self.orbit_radius_km, dt);
     }
 
-    /// Live-Vorschau einer Sim-Stunde auf einer Lager-Kopie — speist die
-    /// Netto-Raten (+x/h) und den Energie-Balken, ohne den Zustand zu ändern.
+    /// Live-Vorschau einer Sim-Stunde auf Kopien von Raster und Lager — speist
+    /// die Netto-Raten (+x/h) und den Energie-Balken, ohne den Zustand zu
+    /// ändern. Berücksichtigt auch den Materialzug laufender Baustellen.
     fn preview(&self) -> (Stockpile, StepReport) {
+        let mut g = self.grid.clone();
         let mut s = self.stock.clone();
-        let rep = gamecore::resolve_step(&self.grid, &mut s, self.orbit_radius_km, 3_600.0);
+        let rep = gamecore::advance(&mut g, &mut s, self.orbit_radius_km, 3_600.0);
         (s, rep)
     }
 
-    /// Platziert ein bestimmtes Gebäude (Gelände/Belegung/Budget vorausgesetzt).
+    /// Setzt eine Baustelle (kein Einmalkauf — Material fließt über die Bauzeit).
     fn build(&mut self, x: u32, y: u32, kind: BuildingKind) {
         let Some(tile) = self.grid.tile(x, y).copied() else {
             return;
@@ -158,22 +160,23 @@ impl BuildApp {
                 .push(format!("{}: falsches Gelände @ ({x},{y})", name(kind)));
             return;
         }
-        let cost = kind.spec().build_cost;
-        if !can_afford(&self.stock, cost) {
-            self.log.push(format!("{}: zu teuer", name(kind)));
-            return;
-        }
-        pay(&mut self.stock, cost);
-        let _ = self.grid.place(x, y, Building::new(kind));
-        self.log.push(format!("Gebaut: {} @ ({x},{y})", name(kind)));
+        let _ = self.grid.place(x, y, Building::construction_site(kind));
+        self.log.push(format!("Baustelle: {} @ ({x},{y})", name(kind)));
     }
 
-    /// Reißt das Gebäude an `(x, y)` ab (volle Kostenerstattung).
+    /// Reißt ein Gebäude ab bzw. bricht eine Baustelle ab. Erstattet das bereits
+    /// verbaute Material (Kosten × Fortschritt) zurück.
     fn demolish(&mut self, x: u32, y: u32) {
         if let Some(b) = self.grid.remove(x, y) {
-            refund(&mut self.stock, b.kind.spec().build_cost);
-            self.log
-                .push(format!("Abgerissen: {} @ ({x},{y})", name(b.kind)));
+            for (r, q) in b.kind.spec().build_cost {
+                self.stock.add(*r, q * b.progress);
+            }
+            let verb = if b.under_construction() {
+                "Bau abgebrochen"
+            } else {
+                "Abgerissen"
+            };
+            self.log.push(format!("{verb}: {} @ ({x},{y})", name(b.kind)));
         }
     }
 
@@ -326,11 +329,16 @@ impl BuildApp {
                 ui.horizontal(|ui| {
                     for x in 0..self.grid.width {
                         let tile = self.grid.tile(x, y).copied().unwrap();
-                        // Gebäude-Kürzel; ausgeschaltet → ausgegraut.
+                        // Baustelle → Fortschritt in %; sonst Kürzel
+                        // (ausgeschaltet → ausgegraut).
                         let (text, text_col) = match tile.building {
-                            Some(b) if b.enabled => (short(b.kind), egui::Color32::WHITE),
-                            Some(b) => (short(b.kind), egui::Color32::from_gray(120)),
-                            None => ("", egui::Color32::WHITE),
+                            Some(b) if b.under_construction() => (
+                                format!("{:.0}%", b.progress * 100.0),
+                                egui::Color32::from_rgb(230, 180, 80),
+                            ),
+                            Some(b) if b.enabled => (short(b.kind).to_string(), egui::Color32::WHITE),
+                            Some(b) => (short(b.kind).to_string(), egui::Color32::from_gray(120)),
+                            None => (String::new(), egui::Color32::WHITE),
                         };
                         let btn = egui::Button::new(egui::RichText::new(text).strong().color(text_col))
                             .fill(terrain_color(tile.terrain))
@@ -372,6 +380,18 @@ impl BuildApp {
                                     }
                                 });
                             }
+                            // Baustelle: nur Abbrechen.
+                            Some(b) if b.under_construction() => {
+                                ui.label(format!(
+                                    "{} — im Bau {:.0}%",
+                                    name(b.kind),
+                                    b.progress * 100.0
+                                ));
+                                if ui.button("Bau abbrechen").clicked() {
+                                    actions.push(Action::Demolish(x, y));
+                                    ui.close_menu();
+                                }
+                            }
                             Some(b) => {
                                 ui.label(name(b.kind));
                                 let toggle = if b.enabled { "Ausschalten" } else { "Einschalten" };
@@ -411,6 +431,16 @@ impl BuildApp {
     /// Tooltip einer Kachel inkl. Zustand und aktuellem Adjazenz-Multiplikator.
     fn tile_tooltip(&self, x: u32, y: u32, tile: &gamecore::Tile) -> String {
         match tile.building {
+            Some(b) if b.under_construction() => {
+                let cost = cost_string(b.kind.spec().build_cost);
+                format!(
+                    "{} — im Bau {:.0}%\nauf {}\nBaukosten: {}",
+                    name(b.kind),
+                    b.progress * 100.0,
+                    terrain_name(tile.terrain),
+                    cost
+                )
+            }
             Some(b) => {
                 let state = if b.enabled { "" } else { " — aus" };
                 let spec = b.kind.spec();
@@ -660,18 +690,3 @@ fn cost_string(cost: &[(Resource, f64)]) -> String {
         .join(", ")
 }
 
-fn can_afford(stock: &Stockpile, cost: &[(Resource, f64)]) -> bool {
-    cost.iter().all(|(r, q)| stock.get(*r) >= *q)
-}
-
-fn pay(stock: &mut Stockpile, cost: &[(Resource, f64)]) {
-    for (r, q) in cost {
-        stock.add(*r, -*q);
-    }
-}
-
-fn refund(stock: &mut Stockpile, cost: &[(Resource, f64)]) {
-    for (r, q) in cost {
-        stock.add(*r, *q);
-    }
-}
