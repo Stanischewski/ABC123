@@ -75,6 +75,32 @@ cargo run -p abc123-client
 
 Die browserbasierte Oberfläche (egui, später Bevy via `trunk serve`) kommt mit
 Phase 1/2 hinzu.
+
+### Datenbank (PostgreSQL in WSL)
+
+Persistenz ist **optional**: ohne `DATABASE_URL` läuft der Server im Speicher;
+mit gesetzter URL verbindet er sich, wendet die Migrationen
+([crates/server/migrations/](crates/server/migrations/)) an und lädt bzw. legt
+den Welt-Zustand an. Postgres läuft in WSL (Ubuntu); Windows erreicht es über das
+localhost-Forwarding von WSL2.
+
+Einmalige Einrichtung (in WSL):
+
+```bash
+sudo apt-get install -y postgresql
+sudo service postgresql start
+sudo -u postgres psql -c "CREATE ROLE sta LOGIN CREATEDB PASSWORD 'DEIN_PASSWORT';"
+sudo -u postgres createdb -O sta abc123
+```
+
+Dann `.env.example` nach `.env` kopieren und `DATABASE_URL` setzen (Vorlage zeigt
+auf `postgres://USER:PASSWORD@localhost:5432/abc123`). `.env` ist gitignoriert.
+
+Nach jedem WSL-Neustart muss der Dienst gestartet werden:
+
+```bash
+wsl sudo service postgresql start
+```
  
 ## Dokumentation
  
