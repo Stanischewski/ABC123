@@ -43,16 +43,21 @@ Das Workspace-Gerüst (Phase 0) steht:
 ```
 
 Die Crate `core` ist als `gamecore` eingebunden, damit ihr Name nicht Rusts
-std-`core` verdeckt. Was in Phase 0 bereits umgesetzt ist:
+std-`core` verdeckt. Umgesetzt:
 
-- **`core`** — Kepler-Propagation auf festen Bahnen (planar, Newton-Raphson),
-  Körper-Hierarchie (Mond ⊂ Planet ⊂ Stern), das Ressourcenmodell (3 + 2 + 1),
-  Energiebudget mit Priorität, Logistik-Effizienz (`min(1, Angebot/Bedarf)`) und
-  die Produktionsrate-Formel — durchgehend mit Unit-Tests.
-- **`server`** — Axum-Skelett: `GET /health`, `GET /system` (Zustand als JSON)
-  und `GET /ws` (WebSocket, der die Weltzeit tickt und Körperpositionen streamt).
-- **`client`** — minimales Binary, das den geteilten Kern nutzt und Positionen
-  *selbst* propagiert (der Beweis für das geteilte, deterministische Modell).
+- **`core`** (Phase 0) — Kepler-Propagation auf festen Bahnen (planar,
+  Newton-Raphson), Körper-Hierarchie (Mond ⊂ Planet ⊂ Stern), das
+  Ressourcenmodell (3 + 2 + 1), Energiebudget mit Priorität, Logistik-Effizienz
+  (`min(1, Angebot/Bedarf)`) und die Produktionsrate-Formel.
+- **`core`** (Phase 1, Bau-Ebene) — Planeten-Raster mit Gelände-Typen, Gebäude
+  (Förderer, Raffinerien, Solar/Fusion, Lager) mit Platzierungsregeln,
+  **Adjazenz-Boni** aus der Nachbarschaft und eine **Produktionsauflösung**, die
+  ein Lager über `dt` fortschreibt — energie- und input-gedrosselt, mit an den
+  Bahnradius gekoppeltem Solarertrag (`1/r²`). Alles deterministisch und getestet.
+- **`server`** — Axum + optionale Postgres-Persistenz: `GET /health`,
+  `GET /system` (Zustand als JSON), `GET /ws` (WebSocket-Stream der Positionen).
+- **`client`** — Binary, das den geteilten Kern nutzt: propagiert Positionen
+  *selbst*, baut eine Demo-Starterbasis und simuliert einen Produktions-Schritt.
  
 ## Bauen & Ausführen
 

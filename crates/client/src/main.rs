@@ -7,7 +7,7 @@
 //! schematische Systemansicht (egui, Phase 1) und die Bevy-Renderung (Phase 2)
 //! tun werden.
 
-use gamecore::Resource;
+use gamecore::{Building, BuildingKind, Resource, Stockpile};
 
 fn main() {
     let system = gamecore::demo_home_system();
@@ -62,6 +62,49 @@ fn main() {
                 );
             }
             None => println!("  {:?} ({:?}) ← Förderung aus Gelände", r, r.tier()),
+        }
+    }
+
+    // --- Bau-Ebene (Phase 1): eine kleine Starterbasis aufbauen und simulieren.
+    println!("\nBau-Ebene — Starterbasis auf dem Heimatplaneten:");
+    let mut planet = gamecore::demo_home_planet();
+    // Mine auf Gestein, daneben Lager (Adjazenz) und ein Solarkollektor.
+    let layout = [
+        (1, 1, BuildingKind::MetalMine),
+        (2, 1, BuildingKind::Depot),
+        (3, 1, BuildingKind::SolarCollector),
+        (6, 1, BuildingKind::CrystalExtractor),
+        (4, 1, BuildingKind::Smelter),
+    ];
+    for (x, y, kind) in layout {
+        match planet.place(x, y, Building::new(kind)) {
+            Ok(()) => println!("  platziert: {kind:?} @ ({x},{y})"),
+            Err(e) => println!("  ABGELEHNT: {kind:?} @ ({x},{y}) — {e:?}"),
+        }
+    }
+
+    // Lager als Startbestand, damit der Smelter sofort etwas zu veredeln hat.
+    let mut stock = Stockpile::new();
+    stock.set(Resource::Metals, 200.0);
+
+    // Den Planeten über einen Sim-Tag fortschreiben (Heimat steht auf ~1 AE).
+    let radius = system.position_of(1, 0.0).unwrap().length();
+    let report = gamecore::resolve_step(&planet, &mut stock, radius, 86_400.0);
+
+    println!(
+        "\nNach 1 Sim-Tag (Energie {:.1}/{:.1}/s, {}):",
+        report.energy_supply,
+        report.energy_demand,
+        if report.energy_satisfied() {
+            "gedeckt"
+        } else {
+            "KNAPP"
+        }
+    );
+    for r in Resource::ALL {
+        let amount = stock.get(r);
+        if amount.abs() > 1e-6 {
+            println!("  {:?}: {:.0}", r, amount);
         }
     }
 }

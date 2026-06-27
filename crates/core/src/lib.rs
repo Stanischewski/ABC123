@@ -13,11 +13,19 @@
 //! - [`economy`] — Lager, Energiebudget, Produktionsrate, Logistik-Kapazität.
 //! - [`time`] — die autoritative Weltuhr.
 //!
+//! Phase 1 (Bau-Ebene) baut darauf auf:
+//!
+//! - [`planet`] — Raster, Gelände, Gebäude, Adjazenz-Boni.
+//! - [`production`] — Zeit-Integration der Produktion (energie- und
+//!   input-gedrosselt, Solar an den Bahnradius gekoppelt).
+//!
 //! Spätere Phasen bauen Flotten, Gefecht und die Galaxie-Ebene darauf auf.
 
 pub mod economy;
 pub mod math;
 pub mod orbit;
+pub mod planet;
+pub mod production;
 pub mod resource;
 pub mod system;
 pub mod time;
@@ -25,6 +33,8 @@ pub mod time;
 pub use economy::{allocate_energy, logistics_efficiency, EnergyDemand, Producer, Stockpile};
 pub use math::Vec2;
 pub use orbit::{OrbitalElements, MU_SUN};
+pub use planet::{Building, BuildingKind, BuildingSpec, Grid, PlaceError, Terrain, Tile};
+pub use production::{resolve_step, StepReport};
 pub use resource::{Recipe, Resource, Tier};
 pub use system::{Body, BodyId, BodyKind, System};
 pub use time::SimClock;
@@ -61,9 +71,38 @@ pub fn demo_home_system() -> System {
     sys
 }
 
+/// Baut ein kleines Demo-Heimatraster: gemischtes Gelände mit ein paar
+/// Ressourcenfeldern. Dient als sichtbarer Startzustand der Bau-Ebene; das
+/// Layout (was wohin) bleibt dem Spieler überlassen.
+pub fn demo_home_planet() -> Grid {
+    let mut g = Grid::new(8, 6, Terrain::Barren);
+    // Ein paar Gelände-Vorkommen einstreuen (DESIGN.md §3.1: Profile).
+    for (x, y) in [(1, 1), (2, 1), (1, 2), (5, 4)] {
+        g.set_terrain(x, y, Terrain::Rock);
+    }
+    for (x, y) in [(6, 1), (6, 2)] {
+        g.set_terrain(x, y, Terrain::Crystal);
+    }
+    for (x, y) in [(3, 4), (4, 4)] {
+        g.set_terrain(x, y, Terrain::GasField);
+    }
+    g.set_terrain(0, 5, Terrain::Ice);
+    g
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn demo_planet_has_mixed_terrain_and_room() {
+        let p = demo_home_planet();
+        assert_eq!(p.width * p.height, 48);
+        // Mindestens je ein Förder-Gelände vorhanden.
+        assert_eq!(p.tile(1, 1).unwrap().terrain, Terrain::Rock);
+        assert_eq!(p.tile(6, 1).unwrap().terrain, Terrain::Crystal);
+        assert_eq!(p.tile(3, 4).unwrap().terrain, Terrain::GasField);
+    }
 
     #[test]
     fn demo_system_is_well_formed() {
