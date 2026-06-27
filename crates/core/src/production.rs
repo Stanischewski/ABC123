@@ -13,9 +13,11 @@
 //! 3. **Produktion in Stufen-Reihenfolge** — erst roh, dann veredelt, dann
 //!    Gate-Gut; jede Stufe sieht die Lager der vorigen.
 
+use std::collections::HashMap;
+
 use crate::economy::{allocate_energy, EnergyDemand, Stockpile};
 use crate::planet::Grid;
-use crate::resource::Tier;
+use crate::resource::{Resource, Tier};
 
 /// Referenz-Bahnradius für Solarertrag (1 AE in km): bei diesem Radius liefert
 /// ein Kollektor seine Nennleistung.
@@ -109,9 +111,37 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
 
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
     // Volle Lager üben Gegendruck aus: Produktion staut sich an der Kapazität,
-    // statt überzulaufen — und Eingänge bleiben dabei erhalten (keine
-    // Verschwendung). Forschung ist ausgenommen (eine Währung, kein Lagergut).
+    // statt überzulaufen — und Eingänge bleiben erhalten (keine Verschwendung).
+    // Forschung ist ausgenommen (eine Währung, kein Lagergut).
+    //
+    // Die Decke ist **verbrauchsbewusst**: ein Produzent darf so viel nachfüllen,
+    // wie diesen Schritt auch verbraucht wird. Sonst würde ein Stoff, der zugleich
+    // gefördert *und* verbraucht wird (Metalle!), bei voller Decke jeden Schritt
+    // um den Verbrauch oszillieren — die Förderung würde am Schrittanfang
+    // blockiert, bevor der Verbrauch später Platz schafft. Das ergäbe ein
+    // flackerndes „1 raus, 1 rein". Mit dem Verbrauch in der Decke bleibt der
+    // Bestand stabil an der Kapazität (Netto-Rate ~0).
     let capacity = grid.storage_capacity();
+
+    let mut consumption: HashMap<Resource, f64> = HashMap::new();
+    for (x, y, b) in grid.buildings() {
+        if !b.is_operational() {
+            continue;
+        }
+        let spec = b.kind.spec();
+        let Some(output) = spec.output else { continue };
+        let Some(recipe) = output.recipe() else { continue };
+        let desired = spec.base_rate * grid.adjacency_multiplier(x, y) * avail_at(x, y) * dt;
+        for (res, qty) in recipe.inputs {
+            *consumption.entry(*res).or_insert(0.0) += desired * qty;
+        }
+    }
+
+    // Bestand vor der Produktion — die Sicherheits-Klemme darf bereits
+    // über der Decke liegende Vorräte (z. B. nach Lager-Abriss) nicht abräumen,
+    // nur frische Produktion deckeln.
+    let before: Vec<(Resource, f64)> = Resource::ALL.iter().map(|r| (*r, stock.get(*r))).collect();
+
     for tier in [Tier::Raw, Tier::Refined, Tier::Gate, Tier::Research] {
         for (x, y, b) in grid.buildings() {
             if !b.is_operational() {
@@ -133,10 +163,11 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
                 f64::INFINITY
             } else {
                 (capacity - stock.get(output)).max(0.0)
+                    + consumption.get(&output).copied().unwrap_or(0.0)
             };
 
             match output.recipe() {
-                // Roh: keine Eingänge, Förderung staut an der Kapazität.
+                // Roh: keine Eingänge, Förderung staut an der (verbrauchsbewussten) Decke.
                 None => stock.add(output, desired.min(headroom)),
                 // Veredelt/Gate: durch Eingangsbestand *und* Kapazität gedrosselt.
                 Some(recipe) => {
@@ -154,6 +185,19 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
                     stock.add(output, actual);
                 }
             }
+        }
+    }
+
+    // Sicherheits-Klemme: war der Verbrauch input-/energie-begrenzt, kann ein
+    // Stoff knapp über die Decke geraten — der Überlauf verfällt. Bereits zuvor
+    // über der Decke liegende Vorräte bleiben aber unangetastet.
+    for (r, start) in before {
+        if r.tier() == Tier::Research {
+            continue;
+        }
+        let ceiling = capacity.max(start);
+        if stock.get(r) > ceiling {
+            stock.set(r, ceiling);
         }
     }
 
@@ -382,6 +426,31 @@ mod tests {
         // Lange Zeit: Förderung staut sich an der Decke.
         resolve_step(&g, &mut stock, AU, 1_000_000.0);
         assert!((stock.get(Resource::Metals) - cap).abs() < 1e-6);
+    }
+
+    #[test]
+    fn full_storage_does_not_oscillate() {
+        // Metalle werden zugleich gefördert (Mine) und verbraucht (Hütte), genau
+        // im Gleichgewicht. Bei voller Decke muss der Bestand stabil bleiben —
+        // nicht jeden Schritt „1 raus, 1 rein" flackern.
+        let mut g = Grid::new(5, 1, Terrain::Barren);
+        g.set_terrain(0, 0, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        // (1,0) bleibt leer → Mine und Hütte sind nicht benachbart (keine Adjazenz).
+        g.place(2, 0, Building::new(BuildingKind::Smelter)).unwrap();
+        g.place(3, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        g.place(4, 0, Building::new(BuildingKind::Depot)).unwrap();
+        let cap = g.storage_capacity();
+        let mut stock = Stockpile::new();
+        stock.set(Resource::Metals, cap);
+
+        resolve_step(&g, &mut stock, AU, 100.0);
+        let m1 = stock.get(Resource::Metals);
+        resolve_step(&g, &mut stock, AU, 100.0);
+        let m2 = stock.get(Resource::Metals);
+        assert!((m1 - cap).abs() < 1e-6, "Metalle nicht an der Decke: {m1}");
+        assert!((m1 - m2).abs() < 1e-6, "Metalle oszillieren: {m1} vs {m2}");
     }
 
     #[test]
