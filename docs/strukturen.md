@@ -26,9 +26,9 @@ Jedes Gebäude entsteht über **kontinuierlichen Ressourcenfluss** statt Einmalz
 
 ### Verarbeitung
 
-**Legierungswerk** — Verarbeitet **Metalle → Legierungen** für Rümpfe, Strukturen und Verteidigung. Verbraucht Betriebsenergie. Speist die mittleren Aufstiegssprossen (Stationsmodule, Strukturen). Phase 1.
+**Hütte** — Verarbeitet **Metalle → Legierungen** für Rümpfe, Strukturen und Verteidigung. Verbraucht Betriebsenergie. Speist die mittleren Aufstiegssprossen (Stationsmodule, Strukturen). Phase 1.
 
-**Elektronikfabrik** — Verarbeitet **Silikate + Metalle → Elektronik** für Schiffssysteme und Hightech-Gebäude. Verbraucht Betriebsenergie. Der erste echte Elektronik-Sink — und damit das Gebäude, das den ersten Satelliten überhaupt ermöglicht. Konkurriert über die Metalle mit dem Legierungswerk: die zentrale Frühspiel-Spannung. Phase 1.
+**Elektronikfabrik** — Verarbeitet **Silikate + Metalle → Elektronik** für Schiffssysteme und Hightech-Gebäude. Verbraucht Betriebsenergie. Der erste echte Elektronik-Sink — und damit das Gebäude, das den ersten Satelliten überhaupt ermöglicht. Konkurriert über die Metalle mit der Hütte: die zentrale Frühspiel-Spannung. Phase 1.
 
 ### Energie
 
@@ -40,7 +40,8 @@ Jedes Gebäude entsteht über **kontinuierlichen Ressourcenfluss** statt Einmalz
 
 **Lager** — Hebt die Lagerkapazität (den Deckel, wie viel du horten kannst) und dient als Adjazenz-Anker für Förderer. Ausdrücklich *kein* physisches Warenlager und *kein* Routing-Ziel: Der Materialpool bleibt global und ortlos, das Lager ist ein abstrakter Kapazitätsknoten, der eine Kachel belegt. Auf der Bau-Ebene übernimmt es zugleich die Rolle, die im System ein Depot spielt. Phase 1.
 
-**Forschungseinrichtung** — Schaltet grundlegende Technologien frei und beschleunigt Forschung, je mehr investiert wird. Kostet eine Kachel (Flächendruck) und verbraucht im Betrieb Elektronik/Energie — ein zweiter Elektronik-Sink, der die Frühwirtschaft kohärenter macht. Vorbedingung für den Schritt in den Orbit (Forschungs-Satellit, später die Orbital-Forschungsstation), der dem Kachel-Kostendruck entkommt. Forschung ist zugleich das Rückgrat der Gebäude-Verbesserung. Phase 1.
+**Forschungseinrichtung** — **Beschleunigt** Forschung, statt sie überhaupt erst zu ermöglichen: Projekte laufen auch ohne sie (jedes ist eine Baustelle, die statt eines Gebäudes eine *Freischaltung* erzeugt — Modell und Katalog in `forschung.md`), aber jede Einrichtung senkt deren Projektzeit. Kostet eine Kachel (Flächendruck) und verbraucht im Betrieb Elektronik/Energie — der zweite Elektronik-Sink, der die Frühwirtschaft kohärenter macht. Damit ein Beschleuniger, kein Pflicht-Schalter.
+Vorbedingung für den orbitalen Forschungs-Satelliten, der dem Kachel-Kostendruck entkommt; Forschung bleibt zugleich das Rückgrat der Gebäude-Verbesserung. Phase 1.
 
 ### Aufstieg ins All
 

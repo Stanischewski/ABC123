@@ -25,17 +25,22 @@ Legende: `[x]` erledigt · `[ ]` offen · `[~]` teilweise.
 - [x] Raster mit Gelände-Typen, Platzierungsregeln (Gelände/Belegung/Eindeutigkeit)
 - [x] Gebäude: Förderer, Raffinerien, Solar/Fusion, Lager, Komposit-Werk
 - [x] Hauptgebäude (Anti-Softlock, Lager-/Adjazenz-Anker, eines pro Körper)
-- [x] Forschungseinrichtung + Forschungspunkte (Elektronik-Sink)
+- [x] Forschungseinrichtung als Elektronik-Sink (Erststand mit Punkte-Modell — wird zum Freischaltungs-Baum / Beschleuniger umgebaut, s. u.)
 - [x] Adjazenz-Boni inkl. Aufschlüsselung; Energie- und Input-Drosselung nach Priorität
 - [x] Bauschlange als kontinuierlicher Ressourcenfluss (kriecht bei Mangel)
 - [x] egui-UI: Bauen/Abreißen/Ein-Aus, Prioritäten, Lager-Raten (+x/h), Energie-Balken
 - [x] Platzierungs-Vorschau (Hover) + Gebäude-Info (Rechtsklick)
 - [x] Schematische System-Ansicht (egui-Marker, an Sim-Zeit gekoppelt)
-
-### Bau-Ebene — offen
-
 - [x] **Lagerkapazität**: Deckel je Stoff; Lager/Hauptgebäude heben ihn; volle Lager drosseln die Produktion (Forschung ausgenommen)
-- [ ] **Tech-Baum**: Forschung *ausgeben* — Freischaltungen, Gebäude-Upgrades (`strukturen.md` §Forschung)
+- [~] **Forschung als Freischaltungs-Baum** (Design: `forschung.md`) — Phase-1-Knoten,
+  Material-Finanzierung und Energie-als-Fluss festgelegt; Implementierung offen:
+  - [ ] Forschungsprojekt als Baustelle (Output „Freischaltung", kriecht bei Mangel,
+    zieht Energie unter Priorität)
+  - [ ] Knoten Legierungen / Elektronik / Komputertechnik / Triebwerktechnik / Raketen /
+    Satelliten samt Voraussetzungen
+  - [ ] Forschungseinrichtung vom Punkte-Produzenten zum **Beschleuniger** umbauen
+  - [ ] Freischaltungen verdrahten: Gebäude (Hütte, Elektronikfabrik) und Aufstieg
+    (Startrampe-Startklasse, Satellit-Nutzlasten)
 - [ ] **Gebäude-Upgrades**: dieselbe Bau-Mechanik auf bestehender Kachel (Stufen)
 - [ ] **Balance-Pass**: Förderraten, Energiekosten, Bauzeiten, Adjazenz-Stärke (Platzhalter → tunen)
 - [ ] Startrampe (Riegel zur Orbit-Ebene, upgradebare Startklasse) — braucht Aufstiegs-Subsystem

@@ -35,7 +35,10 @@ Das Workspace-Gerüst (Phase 0) steht:
 ├── Cargo.toml          # Workspace-Manifest
 ├── docs/
 │   ├── DESIGN.md                      # Kanonisches Design-Dokument
-│   └── Oekonomie-und-System-Ebene.md  # Vertiefung: Ökonomie, Logistik, System-Ebene
+│   ├── Oekonomie-und-System-Ebene.md  # Vertiefung: Ökonomie, Logistik, System-Ebene
+│   ├── strukturen.md                  # Katalog der Bau- und Orbitalstrukturen
+│   ├── forschung.md                   # Forschungs-Freischaltungsbaum (Phase 1)
+│   └── TODO.md                        # Lebende Aufgabenliste nach Phasen
 └── crates/
     ├── core/           # Spielregeln, Kepler, geteilte Typen (Server + Client)
     ├── server/         # Axum, Postgres-Persistenz, liefert auch die Web-UI aus
@@ -152,6 +155,7 @@ Das Design ist die derzeitige Hauptsubstanz des Projekts:
 - **[docs/DESIGN.md](docs/DESIGN.md)** — Vision, die drei Ebenen, Kernmechaniken, Architektur, Roadmap.
 - **[docs/Oekonomie-und-System-Ebene.md](docs/Oekonomie-und-System-Ebene.md)** — vertieft Ressourcen, Produktionsketten, Logistik als räumliche Kapazität, Lagrange-Punkte und den rentablen Radius.
 - **[docs/strukturen.md](docs/strukturen.md)** — Katalog der Bau- und Orbitalstrukturen nach Ebene: Rolle, Verbrauch/Ausstoß, Gelände-Bindung und Platz in der Aufstiegsleiter.
+- **[docs/forschung.md](docs/forschung.md)** — der Phase-1-Forschungsbaum: Freischaltungen statt Prozentboni, mit Material finanziert; die Forschungseinrichtung als Beschleuniger, nicht als Punkte-Produzent.
 - **[docs/TODO.md](docs/TODO.md)** — lebende Aufgabenliste nach Roadmap-Phasen: was erledigt ist und was offen.
 ## Roadmap (Kurzfassung)
  
