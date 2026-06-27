@@ -56,10 +56,12 @@ std-`core` verdeckt. Umgesetzt:
   Bahnradius gekoppeltem Solarertrag (`1/r²`). Alles deterministisch und getestet.
 - **`server`** — Axum + optionale Postgres-Persistenz: `GET /health`,
   `GET /system` (Zustand als JSON), `GET /ws` (WebSocket-Stream der Positionen).
-- **`client`** — egui/eframe-Oberfläche der Bau-Ebene: Planeten-Raster mit
-  Gelände-Farben, Gebäude-Palette, Bauen/Abreißen per Klick, Lager-/Energie-
-  Anzeige und Simulations-Schritte (+1 h / +1 Tag / Auto-Tick). Die gesamte
-  Logik liegt im geteilten Kern — der Client stellt nur dar.
+- **`client`** — egui/eframe-Oberfläche mit zwei Ansichten: die **Bau-Ebene**
+  (Planeten-Raster mit Gelände-Farben, Gebäude-Palette, Bauen/Abreißen per Klick,
+  Adjazenz im Tooltip, Lager-/Energie-Anzeige) und die **schematische
+  System-Ansicht** (Körper auf ihren Kepler-Bahnen als Marker, an die Sim-Zeit
+  gekoppelt). Simulations-Schritte (+1 h / +1 Tag / Auto-Tick) bewegen beides.
+  Die gesamte Logik liegt im geteilten Kern — der Client stellt nur dar.
  
 ## Bauen & Ausführen
 
