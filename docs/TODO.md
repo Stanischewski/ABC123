@@ -34,7 +34,7 @@ Legende: `[x]` erledigt · `[ ]` offen · `[~]` teilweise.
 
 ### Bau-Ebene — offen
 
-- [ ] **Lagerkapazität**: Deckel je Stoff; Lager/Hauptgebäude heben ihn (derzeit unbegrenzt)
+- [x] **Lagerkapazität**: Deckel je Stoff; Lager/Hauptgebäude heben ihn; volle Lager drosseln die Produktion (Forschung ausgenommen)
 - [ ] **Tech-Baum**: Forschung *ausgeben* — Freischaltungen, Gebäude-Upgrades (`strukturen.md` §Forschung)
 - [ ] **Gebäude-Upgrades**: dieselbe Bau-Mechanik auf bestehender Kachel (Stufen)
 - [ ] **Balance-Pass**: Förderraten, Energiekosten, Bauzeiten, Adjazenz-Stärke (Platzhalter → tunen)

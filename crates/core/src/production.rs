@@ -108,6 +108,10 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     };
 
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
+    // Volle Lager üben Gegendruck aus: Produktion staut sich an der Kapazität,
+    // statt überzulaufen — und Eingänge bleiben dabei erhalten (keine
+    // Verschwendung). Forschung ist ausgenommen (eine Währung, kein Lagergut).
+    let capacity = grid.storage_capacity();
     for tier in [Tier::Raw, Tier::Refined, Tier::Gate, Tier::Research] {
         for (x, y, b) in grid.buildings() {
             if !b.is_operational() {
@@ -125,10 +129,16 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
                 continue;
             }
 
+            let headroom = if output.tier() == Tier::Research {
+                f64::INFINITY
+            } else {
+                (capacity - stock.get(output)).max(0.0)
+            };
+
             match output.recipe() {
-                // Roh: keine Eingänge, direkt fördern.
-                None => stock.add(output, desired),
-                // Veredelt/Gate: durch Eingangsbestand gedrosselt.
+                // Roh: keine Eingänge, Förderung staut an der Kapazität.
+                None => stock.add(output, desired.min(headroom)),
+                // Veredelt/Gate: durch Eingangsbestand *und* Kapazität gedrosselt.
                 Some(recipe) => {
                     let mut frac = 1.0_f64;
                     for (res, qty) in recipe.inputs {
@@ -137,7 +147,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
                             frac = frac.min(stock.get(*res) / need);
                         }
                     }
-                    let actual = desired * frac.clamp(0.0, 1.0);
+                    let actual = (desired * frac.clamp(0.0, 1.0)).min(headroom);
                     for (res, qty) in recipe.inputs {
                         stock.add(*res, -actual * qty);
                     }
@@ -338,21 +348,57 @@ mod tests {
 
     #[test]
     fn advance_produces_then_builds_from_same_pool() {
-        // Betriebsbereite Mine + Solar fördern Metalle; eine Depot-Baustelle
-        // wird im selben Schritt aus dem frisch geförderten Material fertig.
-        let mut g = Grid::new(3, 1, Terrain::Rock);
+        // Betriebsbereite Mine + Solar fördern Metalle (Zentrale hebt die
+        // Lager-Decke); eine Depot-Baustelle wird im selben Schritt aus dem
+        // frisch geförderten Material fertig.
+        let mut g = Grid::new(4, 1, Terrain::Rock);
         g.set_terrain(2, 0, Terrain::Barren);
+        g.set_terrain(3, 0, Terrain::Barren);
         g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
         g.place(1, 0, Building::new(BuildingKind::SolarCollector))
             .unwrap();
         g.place(2, 0, Building::construction_site(BuildingKind::Depot))
             .unwrap();
+        g.place(3, 0, Building::new(BuildingKind::Headquarters))
+            .unwrap();
 
         let mut stock = Stockpile::new();
-        // Eine Stunde: Mine ~3600 Metalle; Depot (3600 s, 30 Metalle) wird fertig.
+        // Eine Stunde: Förderung füllt das Lager (Zentrale → Kapazität 600),
+        // Depot (3600 s, 30 Metalle) wird fertig.
         advance(&mut g, &mut stock, AU, 3_600.0);
-        assert!(stock.get(Resource::Metals) > 3_000.0);
+        assert!(stock.get(Resource::Metals) > 400.0);
         assert!(g.tile(2, 0).unwrap().building.unwrap().is_operational());
+    }
+
+    #[test]
+    fn production_stops_at_storage_capacity() {
+        // Mine + Solar, kein Lager → Decke = STORAGE_BASE (100).
+        let mut g = Grid::new(2, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        let cap = g.storage_capacity();
+        let mut stock = Stockpile::new();
+        // Lange Zeit: Förderung staut sich an der Decke.
+        resolve_step(&g, &mut stock, AU, 1_000_000.0);
+        assert!((stock.get(Resource::Metals) - cap).abs() < 1e-6);
+    }
+
+    #[test]
+    fn full_storage_preserves_refinery_inputs() {
+        // Hütte + Solar, Legierungen schon am Deckel → kein Output, und die
+        // Metalle bleiben unangetastet (kein Input-Verbrauch ins Leere).
+        let mut g = Grid::new(2, 1, Terrain::Barren);
+        g.place(0, 0, Building::new(BuildingKind::Smelter)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        let cap = g.storage_capacity();
+        let mut stock = Stockpile::new();
+        stock.set(Resource::Alloys, cap);
+        stock.set(Resource::Metals, 1_000.0);
+        resolve_step(&g, &mut stock, AU, 100.0);
+        assert!((stock.get(Resource::Alloys) - cap).abs() < 1e-6);
+        assert!((stock.get(Resource::Metals) - 1_000.0).abs() < 1e-6);
     }
 
     #[test]

@@ -18,6 +18,8 @@ use crate::resource::Resource;
 pub const ADJACENCY_PER_NEIGHBOR: f64 = 0.10;
 /// Obergrenze des Adjazenz-Multiplikators (würzt, dominiert nicht).
 pub const ADJACENCY_CAP: f64 = 1.5;
+/// Lager-Grundkapazität je Stoff, auch ohne Lagergebäude (Bootstrap-Floor).
+pub const STORAGE_BASE: f64 = 100.0;
 
 /// Geländeprofil einer Kachel. Bindet Rohstoffe an Orte (DESIGN.md §4.1):
 /// jeder Rohstoff hängt an *einem* Gelände, damit Förder-Platzierung zählt und
@@ -235,6 +237,16 @@ impl BuildingKind {
     /// Darf pro Raster nur einmal existieren (genau eine Zentrale pro Körper).
     pub fn is_unique(self) -> bool {
         matches!(self, BuildingKind::Headquarters)
+    }
+
+    /// Lagerkapazität, die dieses Gebäude je Stoff beisteuert. Nur Lager und
+    /// Zentrale (die eigene Kapazität mitbringt) tragen bei.
+    pub fn storage(self) -> f64 {
+        match self {
+            BuildingKind::Depot => 1_000.0,
+            BuildingKind::Headquarters => 500.0,
+            _ => 0.0,
+        }
     }
 
     /// Ob dieses Gebäude auf das gegebene Gelände gesetzt werden darf.
@@ -515,6 +527,18 @@ impl Grid {
         })
     }
 
+    /// Gesamte Lagerkapazität **je Stoff**: Grundwert plus die Beiträge aller
+    /// betriebsbereiten Lager und Zentralen. Produktion staut sich an dieser
+    /// Decke (siehe [`crate::production`]); Forschung ist ausgenommen.
+    pub fn storage_capacity(&self) -> f64 {
+        let from_buildings: f64 = self
+            .buildings()
+            .filter(|(_, _, b)| b.is_operational())
+            .map(|(_, _, b)| b.kind.storage())
+            .sum();
+        STORAGE_BASE + from_buildings
+    }
+
     /// Adjazenz-Multiplikator (≥ 1.0) für den Produzenten an `(x, y)`.
     ///
     /// Phase-1-Regeln (bewusst schlicht, DESIGN.md §4.2 / Begleitdokument §13):
@@ -691,6 +715,19 @@ mod tests {
         stock.set(Resource::Metals, 1000.0);
         g.advance_construction(&mut stock, 10_000.0);
         assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn storage_capacity_sums_operational_storage() {
+        let mut g = Grid::new(2, 1, Terrain::Barren);
+        assert!((g.storage_capacity() - STORAGE_BASE).abs() < 1e-9);
+        g.place(0, 0, Building::new(BuildingKind::Headquarters))
+            .unwrap();
+        g.place(1, 0, Building::new(BuildingKind::Depot)).unwrap();
+        assert!((g.storage_capacity() - (STORAGE_BASE + 1_500.0)).abs() < 1e-9);
+        // Ausgeschaltetes Lager zählt nicht.
+        g.set_enabled(1, 0, false);
+        assert!((g.storage_capacity() - (STORAGE_BASE + 500.0)).abs() < 1e-9);
     }
 
     #[test]

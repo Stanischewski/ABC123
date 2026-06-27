@@ -20,7 +20,7 @@
 use eframe::egui;
 use gamecore::{
     Building, BuildingKind, BodyKind, Grid, PlaceError, Resource, StepReport, Stockpile, System,
-    Terrain,
+    Terrain, Tier,
 };
 
 /// Gebäude in der Palette, in Bau-Reihenfolge.
@@ -114,11 +114,12 @@ impl BuildApp {
         let system = gamecore::demo_home_system();
         let orbit_radius_km = system.position_of(1, 0.0).map(|p| p.length()).unwrap_or(1.0);
 
+        // Startbestand innerhalb der Anfangskapazität (Zentrale 500 + Basis 100).
         let mut stock = Stockpile::new();
-        stock.set(Resource::Metals, 1500.0);
-        stock.set(Resource::Alloys, 200.0);
-        stock.set(Resource::Electronics, 100.0);
-        stock.set(Resource::Gases, 200.0);
+        stock.set(Resource::Metals, 500.0);
+        stock.set(Resource::Alloys, 100.0);
+        stock.set(Resource::Electronics, 80.0);
+        stock.set(Resource::Gases, 150.0);
 
         BuildApp {
             view: View::Build,
@@ -187,6 +188,10 @@ impl BuildApp {
         }
         if dd.abs() > 0.05 {
             s.push_str(&format!("\nEnergie-Bedarf {dd:+.1}/s"));
+            any = true;
+        }
+        if kind.storage() > 0.0 {
+            s.push_str(&format!("\nLagerkapazität +{:.0}", kind.storage()));
             any = true;
         }
         if !any {
@@ -318,11 +323,24 @@ impl BuildApp {
                 let (rates, rep) = self.grid_rates(&self.grid);
 
                 ui.separator();
-                ui.heading("Lager");
+                let cap = self.grid.storage_capacity();
+                ui.heading(format!("Lager (Kap. {cap:.0})"));
                 egui::Grid::new("stock").striped(true).num_columns(3).show(ui, |ui| {
                     for (i, r) in Resource::ALL.iter().enumerate() {
                         ui.label(format!("{r:?}"));
-                        ui.label(format!("{:.0}", self.stock.get(*r)));
+                        let amt = self.stock.get(*r);
+                        if r.tier() == Tier::Research {
+                            // Forschung ist eine Währung, kein Lagergut → keine Decke.
+                            ui.label(format!("{amt:.0}"));
+                        } else {
+                            let full = amt >= cap - 0.5;
+                            let col = if full {
+                                egui::Color32::from_rgb(200, 90, 80)
+                            } else {
+                                ui.visuals().text_color()
+                            };
+                            ui.colored_label(col, format!("{amt:.0} / {cap:.0}"));
+                        }
                         // Netto-Änderung über die nächste Sim-Stunde.
                         let (txt, col) = rate_label(rates[i]);
                         ui.colored_label(col, txt);
@@ -504,6 +522,9 @@ impl BuildApp {
                                             ""
                                         };
                                         ui.label(format!("Energie: +{:.1}/s{note}", spec.energy_output));
+                                    }
+                                    if b.kind.storage() > 0.0 {
+                                        ui.label(format!("Lagerkapazität: +{:.0}", b.kind.storage()));
                                     }
                                 });
                                 if ui.button("Abreißen").clicked() {
