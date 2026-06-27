@@ -87,6 +87,8 @@ pub fn demo_home_planet() -> Grid {
         g.set_terrain(x, y, Terrain::GasField);
     }
     g.set_terrain(0, 5, Terrain::Ice);
+    // Die Zentrale steht von Beginn an (erster Baustein, Anti-Softlock).
+    let _ = g.place(3, 2, Building::new(BuildingKind::Headquarters));
     g
 }
 

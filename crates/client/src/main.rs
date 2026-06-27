@@ -18,16 +18,21 @@
 )]
 
 use eframe::egui;
-use gamecore::{Building, BuildingKind, BodyKind, Grid, Resource, StepReport, Stockpile, System, Terrain};
+use gamecore::{
+    Building, BuildingKind, BodyKind, Grid, PlaceError, Resource, StepReport, Stockpile, System,
+    Terrain,
+};
 
 /// Gebäude in der Palette, in Bau-Reihenfolge.
-const PALETTE: [BuildingKind; 9] = [
+const PALETTE: [BuildingKind; 11] = [
+    BuildingKind::Headquarters,
     BuildingKind::MetalMine,
     BuildingKind::CrystalExtractor,
     BuildingKind::GasCollector,
     BuildingKind::Smelter,
     BuildingKind::ElectronicsFab,
     BuildingKind::CompositeFab,
+    BuildingKind::ResearchLab,
     BuildingKind::SolarCollector,
     BuildingKind::FusionReactor,
     BuildingKind::Depot,
@@ -192,19 +197,19 @@ impl BuildApp {
 
     /// Setzt eine Baustelle (kein Einmalkauf — Material fließt über die Bauzeit).
     fn build(&mut self, x: u32, y: u32, kind: BuildingKind) {
-        let Some(tile) = self.grid.tile(x, y).copied() else {
-            return;
-        };
-        if tile.building.is_some() {
-            return;
+        match self.grid.place(x, y, Building::construction_site(kind)) {
+            Ok(()) => self.log.push(format!("Baustelle: {} @ ({x},{y})", name(kind))),
+            Err(PlaceError::WrongTerrain) => self
+                .log
+                .push(format!("{}: falsches Gelände @ ({x},{y})", name(kind))),
+            Err(PlaceError::Occupied) => {
+                self.log.push(format!("{}: Feld belegt", name(kind)))
+            }
+            Err(PlaceError::AlreadyPresent) => self
+                .log
+                .push(format!("{}: existiert bereits (nur eines erlaubt)", name(kind))),
+            Err(PlaceError::OutOfBounds) => {}
         }
-        if !kind.can_build_on(tile.terrain) {
-            self.log
-                .push(format!("{}: falsches Gelände @ ({x},{y})", name(kind)));
-            return;
-        }
-        let _ = self.grid.place(x, y, Building::construction_site(kind));
-        self.log.push(format!("Baustelle: {} @ ({x},{y})", name(kind)));
     }
 
     /// Reißt ein Gebäude ab bzw. bricht eine Baustelle ab. Erstattet das bereits
@@ -682,6 +687,8 @@ impl BuildApp {
 fn name(kind: BuildingKind) -> &'static str {
     use BuildingKind::*;
     match kind {
+        Headquarters => "Hauptgebäude",
+        ResearchLab => "Forschungseinrichtung",
         MetalMine => "Mine",
         CrystalExtractor => "Kristall-Förderer",
         GasCollector => "Gas-Kollektor",
@@ -697,6 +704,8 @@ fn name(kind: BuildingKind) -> &'static str {
 fn short(kind: BuildingKind) -> &'static str {
     use BuildingKind::*;
     match kind {
+        Headquarters => "HQ",
+        ResearchLab => "Fo",
         MetalMine => "Mi",
         CrystalExtractor => "Kr",
         GasCollector => "Ga",

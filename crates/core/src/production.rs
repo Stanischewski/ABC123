@@ -108,7 +108,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     };
 
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
-    for tier in [Tier::Raw, Tier::Refined, Tier::Gate] {
+    for tier in [Tier::Raw, Tier::Refined, Tier::Gate, Tier::Research] {
         for (x, y, b) in grid.buildings() {
             if !b.is_operational() {
                 continue;
@@ -385,6 +385,32 @@ mod tests {
         assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
         g.set_enabled(1, 0, false);
         assert!((g.adjacency_multiplier(0, 0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn headquarters_produces_metals_without_energy() {
+        // Keine Energiequelle — die Zentrale fördert trotzdem (Anti-Softlock).
+        let mut g = Grid::new(1, 1, Terrain::Barren);
+        g.place(0, 0, Building::new(BuildingKind::Headquarters))
+            .unwrap();
+        let mut stock = Stockpile::new();
+        resolve_step(&g, &mut stock, AU, 100.0);
+        // base_rate 0.25/s × 100 s = 25 Metalle.
+        assert!((stock.get(Resource::Metals) - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn research_lab_turns_electronics_into_research() {
+        let mut g = Grid::new(2, 1, Terrain::Barren);
+        g.place(0, 0, Building::new(BuildingKind::ResearchLab)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+            .unwrap();
+        let mut stock = Stockpile::new();
+        stock.set(Resource::Electronics, 1000.0);
+        resolve_step(&g, &mut stock, AU, 100.0);
+        // 0.3/s × 100 s = 30 Forschung, verbraucht 30 Elektronik.
+        assert!((stock.get(Resource::Research) - 30.0).abs() < 1e-6);
+        assert!((stock.get(Resource::Electronics) - 970.0).abs() < 1e-6);
     }
 
     #[test]

@@ -51,6 +51,8 @@ impl Terrain {
 /// Gebäudetypen der Bau-Ebene (Phase 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildingKind {
+    // Zentrale — Herz der Kolonie, genau eine pro Körper (strukturen.md).
+    Headquarters,
     // Förderer (gelände-gebunden)
     MetalMine,
     CrystalExtractor,
@@ -59,6 +61,8 @@ pub enum BuildingKind {
     Smelter,        // Metalle → Legierungen
     ElectronicsFab, // Silikate + Metalle → Elektronik
     CompositeFab,   // Legierungen + Elektronik → Komposit
+    // Forschung — Elektronik + Energie → Forschungspunkte.
+    ResearchLab,
     // Energie (Portfolio: Solar vs. Fusion, DESIGN.md §4.1)
     SolarCollector,
     FusionReactor,
@@ -97,6 +101,18 @@ impl BuildingKind {
         use BuildingKind::*;
         use Resource::*;
         match self {
+            Headquarters => BuildingSpec {
+                required_terrain: None,
+                // Minimale Grundförderung *ohne* Energie → kein Softlock.
+                output: Some(Metals),
+                base_rate: 0.25,
+                energy_demand: 0.0,
+                energy_output: 0.0,
+                fuel_rate: 0.0,
+                solar: false,
+                build_cost: &[(Metals, 80.0)],
+                build_time: 3_600.0,
+            },
             MetalMine => BuildingSpec {
                 required_terrain: Some(Terrain::Rock),
                 output: Some(Metals),
@@ -163,6 +179,17 @@ impl BuildingKind {
                 build_cost: &[(Alloys, 60.0), (Electronics, 60.0)],
                 build_time: 28_800.0,
             },
+            ResearchLab => BuildingSpec {
+                required_terrain: None,
+                output: Some(Research),
+                base_rate: 0.3,
+                energy_demand: 4.0,
+                energy_output: 0.0,
+                fuel_rate: 0.0,
+                solar: false,
+                build_cost: &[(Metals, 60.0), (Electronics, 40.0)],
+                build_time: 14_400.0,
+            },
             SolarCollector => BuildingSpec {
                 required_terrain: None,
                 output: None,
@@ -197,6 +224,17 @@ impl BuildingKind {
                 build_time: 3_600.0,
             },
         }
+    }
+
+    /// Lager-Anker: beschleunigt benachbarte Produzenten. Lager *und*
+    /// Hauptgebäude (bringt eigene Lagerkapazität mit).
+    pub fn is_storage_anchor(self) -> bool {
+        matches!(self, BuildingKind::Depot | BuildingKind::Headquarters)
+    }
+
+    /// Darf pro Raster nur einmal existieren (genau eine Zentrale pro Körper).
+    pub fn is_unique(self) -> bool {
+        matches!(self, BuildingKind::Headquarters)
     }
 
     /// Ob dieses Gebäude auf das gegebene Gelände gesetzt werden darf.
@@ -287,6 +325,9 @@ pub enum PlaceError {
     OutOfBounds,
     Occupied,
     WrongTerrain,
+    /// Ein Gebäude, das pro Raster nur einmal erlaubt ist (z. B. die Zentrale),
+    /// existiert bereits.
+    AlreadyPresent,
 }
 
 /// Das Planeten-Raster: endliche Fläche (DESIGN.md §3.1), Reihen-weise (row-major).
@@ -337,7 +378,7 @@ impl Grid {
         }
     }
 
-    /// Platziert ein Gebäude, prüft Grenzen, Belegung und Gelände.
+    /// Platziert ein Gebäude, prüft Grenzen, Belegung, Gelände und Eindeutigkeit.
     pub fn place(&mut self, x: u32, y: u32, building: Building) -> Result<(), PlaceError> {
         let i = self.index(x, y).ok_or(PlaceError::OutOfBounds)?;
         let tile = &self.tiles[i];
@@ -347,8 +388,18 @@ impl Grid {
         if !building.kind.can_build_on(tile.terrain) {
             return Err(PlaceError::WrongTerrain);
         }
+        if building.kind.is_unique() && self.contains_kind(building.kind) {
+            return Err(PlaceError::AlreadyPresent);
+        }
         self.tiles[i].building = Some(building);
         Ok(())
+    }
+
+    /// Ob bereits irgendwo ein Gebäude dieses Typs steht (auch als Baustelle).
+    pub fn contains_kind(&self, kind: BuildingKind) -> bool {
+        self.tiles
+            .iter()
+            .any(|t| t.building.map(|b| b.kind) == Some(kind))
     }
 
     /// Entfernt ein Gebäude und gibt es zurück.
@@ -494,7 +545,7 @@ impl Grid {
         let recipe_inputs = output.recipe().map(|r| r.inputs).unwrap_or(&[]);
 
         for neighbor in self.neighbor_buildings(x, y) {
-            if neighbor == BuildingKind::Depot {
+            if neighbor.is_storage_anchor() {
                 out.push((neighbor, ADJACENCY_PER_NEIGHBOR));
             } else if let Some(nout) = neighbor.spec().output {
                 if recipe_inputs.iter().any(|(r, _)| *r == nout) {
@@ -639,6 +690,29 @@ mod tests {
         let mut stock = Stockpile::new();
         stock.set(Resource::Metals, 1000.0);
         g.advance_construction(&mut stock, 10_000.0);
+        assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn headquarters_is_unique_per_grid() {
+        let mut g = Grid::new(3, 1, Terrain::Barren);
+        assert!(g
+            .place(0, 0, Building::new(BuildingKind::Headquarters))
+            .is_ok());
+        // Zweite Zentrale (auch als Baustelle) wird abgewiesen.
+        assert_eq!(
+            g.place(2, 0, Building::construction_site(BuildingKind::Headquarters)),
+            Err(PlaceError::AlreadyPresent)
+        );
+    }
+
+    #[test]
+    fn headquarters_acts_as_storage_anchor() {
+        let mut g = Grid::new(2, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        g.place(1, 0, Building::new(BuildingKind::Headquarters))
+            .unwrap();
+        // Zentrale wirkt wie ein Lager → +10 % für die Mine.
         assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
     }
 
