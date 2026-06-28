@@ -17,7 +17,9 @@
 //!
 //! - [`planet`] — Raster, Gelände, Gebäude, Adjazenz-Boni.
 //! - [`production`] — Zeit-Integration der Produktion (energie- und
-//!   input-gedrosselt, Solar an den Bahnradius gekoppelt).
+//!   input-gedrosselt, Solar an den Bahnradius gekoppelt) samt Forschung.
+//! - [`research`] — der Freischaltungs-Baum: Projekte als Baustellen, die
+//!   Gebäude und Aufstiegsstufen freischalten.
 //!
 //! Spätere Phasen bauen Flotten, Gefecht und die Galaxie-Ebene darauf auf.
 
@@ -26,6 +28,7 @@ pub mod math;
 pub mod orbit;
 pub mod planet;
 pub mod production;
+pub mod research;
 pub mod resource;
 pub mod system;
 pub mod time;
@@ -35,6 +38,7 @@ pub use math::Vec2;
 pub use orbit::{OrbitalElements, MU_SUN};
 pub use planet::{Building, BuildingKind, BuildingSpec, Grid, PlaceError, Terrain, Tile};
 pub use production::{advance, resolve_step, StepReport};
+pub use research::{ActiveProject, ResearchId, ResearchNode, ResearchState, Unlock};
 pub use resource::{Recipe, Resource, Tier};
 pub use system::{Body, BodyId, BodyKind, System};
 pub use time::SimClock;

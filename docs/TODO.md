@@ -25,22 +25,23 @@ Legende: `[x]` erledigt · `[ ]` offen · `[~]` teilweise.
 - [x] Raster mit Gelände-Typen, Platzierungsregeln (Gelände/Belegung/Eindeutigkeit)
 - [x] Gebäude: Förderer, Raffinerien, Solar/Fusion, Lager, Komposit-Werk
 - [x] Hauptgebäude (Anti-Softlock, Lager-/Adjazenz-Anker, eines pro Körper)
-- [x] Forschungseinrichtung als Elektronik-Sink (Erststand mit Punkte-Modell — wird zum Freischaltungs-Baum / Beschleuniger umgebaut, s. u.)
 - [x] Adjazenz-Boni inkl. Aufschlüsselung; Energie- und Input-Drosselung nach Priorität
 - [x] Bauschlange als kontinuierlicher Ressourcenfluss (kriecht bei Mangel)
 - [x] egui-UI: Bauen/Abreißen/Ein-Aus, Prioritäten, Lager-Raten (+x/h), Energie-Balken
 - [x] Platzierungs-Vorschau (Hover) + Gebäude-Info (Rechtsklick)
 - [x] Schematische System-Ansicht (egui-Marker, an Sim-Zeit gekoppelt)
-- [x] **Lagerkapazität**: Deckel je Stoff; Lager/Hauptgebäude heben ihn; volle Lager drosseln die Produktion (Forschung ausgenommen)
-- [~] **Forschung als Freischaltungs-Baum** (Design: `forschung.md`) — Phase-1-Knoten,
-  Material-Finanzierung und Energie-als-Fluss festgelegt; Implementierung offen:
-  - [ ] Forschungsprojekt als Baustelle (Output „Freischaltung", kriecht bei Mangel,
-    zieht Energie unter Priorität)
-  - [ ] Knoten Legierungen / Elektronik / Komputertechnik / Triebwerktechnik / Raketen /
+- [x] **Lagerkapazität**: Deckel je Stoff; Lager/Hauptgebäude heben ihn; volle Lager drosseln die Produktion
+- [x] **Forschung als Freischaltungs-Baum** (Design: `forschung.md`) — Material-finanziert,
+  Energie als Fluss, kein Punkte-Modell mehr (`Resource::Research` entfernt):
+  - [x] Forschungsprojekt als Baustelle (kriecht bei Mangel, zieht Energie unter Priorität)
+  - [x] Knoten Legierungen / Elektronik / Komputertechnik / Triebwerktechnik / Raketen /
     Satelliten samt Voraussetzungen
-  - [ ] Forschungseinrichtung vom Punkte-Produzenten zum **Beschleuniger** umbauen
-  - [ ] Freischaltungen verdrahten: Gebäude (Hütte, Elektronikfabrik) und Aufstieg
-    (Startrampe-Startklasse, Satellit-Nutzlasten)
+  - [x] Forschungseinrichtung vom Punkte-Produzenten zum **Beschleuniger** umgebaut
+    (senkt Projektzeit, frisst im Betrieb Elektronik + Energie)
+  - [x] Gebäude-Freischaltung verdrahtet: Hütte ← *Legierungen*, Elektronikfabrik ← *Elektronik*
+  - [x] egui-Forschungs-Tab: Baum mit Status, Projekt starten/abbrechen, Energie-Priorität
+  - [~] Aufstiegs-Freischaltungen (Startrampe-Startklasse, Satellit-Nutzlasten) als
+    Fähigkeit im Baum vermerkt; konkrete Gebäude/Subsystem folgen (s. Aufstieg)
 - [ ] **Gebäude-Upgrades**: dieselbe Bau-Mechanik auf bestehender Kachel (Stufen)
 - [ ] **Balance-Pass**: Förderraten, Energiekosten, Bauzeiten, Adjazenz-Stärke (Platzhalter → tunen)
 - [ ] Startrampe (Riegel zur Orbit-Ebene, upgradebare Startklasse) — braucht Aufstiegs-Subsystem

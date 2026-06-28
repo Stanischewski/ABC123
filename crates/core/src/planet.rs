@@ -63,7 +63,8 @@ pub enum BuildingKind {
     Smelter,        // Metalle → Legierungen
     ElectronicsFab, // Silikate + Metalle → Elektronik
     CompositeFab,   // Legierungen + Elektronik → Komposit
-    // Forschung — Elektronik + Energie → Forschungspunkte.
+    // Forschung — Beschleuniger: senkt im Betrieb die Projektzeit, frisst dabei
+    // Elektronik + Energie (kein Produzent, siehe crate::research).
     ResearchLab,
     // Energie (Portfolio: Solar vs. Fusion, DESIGN.md §4.1)
     SolarCollector,
@@ -183,8 +184,10 @@ impl BuildingKind {
             },
             ResearchLab => BuildingSpec {
                 required_terrain: None,
-                output: Some(Research),
-                base_rate: 0.3,
+                // Kein Produzent: beschleunigt die Forschung (crate::research) und
+                // frisst dabei Elektronik + Energie. base_rate trägt hier nicht.
+                output: None,
+                base_rate: 0.0,
                 energy_demand: 4.0,
                 energy_output: 0.0,
                 fuel_rate: 0.0,
@@ -246,6 +249,18 @@ impl BuildingKind {
             BuildingKind::Depot => 1_000.0,
             BuildingKind::Headquarters => 500.0,
             _ => 0.0,
+        }
+    }
+
+    /// Der Forschungsknoten, der dieses Gebäude freischaltet (`None` = von
+    /// Beginn an baubar). Verdrahtet den Freischaltungs-Baum (`forschung.md`):
+    /// die Hütte hängt an *Legierungen*, die Elektronikfabrik an *Elektronik*.
+    pub fn required_research(self) -> Option<crate::research::ResearchId> {
+        use crate::research::ResearchId;
+        match self {
+            BuildingKind::Smelter => Some(ResearchId::Alloys),
+            BuildingKind::ElectronicsFab => Some(ResearchId::Electronics),
+            _ => None,
         }
     }
 

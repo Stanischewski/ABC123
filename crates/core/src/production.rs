@@ -12,11 +12,16 @@
 //!    ([`crate::economy::allocate_energy`]).
 //! 3. **Produktion in Stufen-Reihenfolge** — erst roh, dann veredelt, dann
 //!    Gate-Gut; jede Stufe sieht die Lager der vorigen.
+//! 4. **Forschung** — das aktive Projekt (falls eines läuft) verbraucht Material
+//!    als Fluss und kriecht bei Mangel; Forschungseinrichtungen beschleunigen es
+//!    und konkurrieren als Energie-Verbraucher unter der Forschungs-Priorität
+//!    (siehe [`crate::research`]).
 
 use std::collections::HashMap;
 
 use crate::economy::{allocate_energy, EnergyDemand, Stockpile};
-use crate::planet::Grid;
+use crate::planet::{BuildingKind, Grid};
+use crate::research::{ResearchState, LAB_ELECTRONICS_RATE, LAB_SPEEDUP_PER_LAB};
 use crate::resource::{Resource, Tier};
 
 /// Referenz-Bahnradius für Solarertrag (1 AE in km): bei diesem Radius liefert
@@ -53,8 +58,22 @@ impl StepReport {
 }
 
 /// Schreibt `stock` um `dt` Sekunden fort, gegeben das Raster und den aktuellen
-/// Bahnradius des Körpers (für den Solarertrag).
+/// Bahnradius des Körpers (für den Solarertrag). **Ohne** Forschung — praktisch
+/// für Vorschauen und Tests; der volle Schritt läuft über [`advance`].
 pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt: f64) -> StepReport {
+    step_core(grid, stock, None, orbit_radius_km, dt)
+}
+
+/// Der gemeinsame Kern eines Schritts: Energie, Produktion und — falls ein
+/// Forschungszustand übergeben wird — die Forschung. Die Bau-Ebene wird nur
+/// gelesen; Baufortschritt läuft separat in [`advance`].
+fn step_core(
+    grid: &Grid,
+    stock: &mut Stockpile,
+    research: Option<&mut ResearchState>,
+    orbit_radius_km: f64,
+    dt: f64,
+) -> StepReport {
     let dt = dt.max(0.0);
 
     // Struktureller Netto-Fluss je Stoff (Einheiten/Sekunde), ungeklemmt durch
@@ -112,11 +131,33 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
             ));
         }
     }
-    let energy_demand: f64 = consumers.iter().map(|(_, _, d)| d.amount).sum();
-    let demands: Vec<EnergyDemand> = consumers.iter().map(|(_, _, d)| *d).collect();
+
+    // … plus die Forschungseinrichtungen, **falls** gerade ein Projekt läuft:
+    // sie ziehen Strom unter der Forschungs-Priorität — Forschung konkurriert so
+    // mit der Produktion um Energie (`forschung.md`). Ohne aktives Projekt sind
+    // sie inert (kein Bedarf, kein Verbrauch).
+    let research_active = research.as_deref().is_some_and(|r| r.active().is_some());
+    let research_priority = research.as_deref().map_or(0, |r| r.priority());
+    let lab_count = if research_active {
+        grid.buildings()
+            .filter(|(_, _, b)| b.is_operational() && b.kind == BuildingKind::ResearchLab)
+            .count()
+    } else {
+        0
+    };
+
+    let mut demands: Vec<EnergyDemand> = consumers.iter().map(|(_, _, d)| *d).collect();
+    let lab_offset = demands.len();
+    for _ in 0..lab_count {
+        demands.push(EnergyDemand {
+            priority: research_priority,
+            amount: BuildingKind::ResearchLab.spec().energy_demand,
+        });
+    }
+    let energy_demand: f64 = demands.iter().map(|d| d.amount).sum();
     let energy_avail = allocate_energy(energy_supply, &demands);
 
-    // Schneller Zugriff: Energie-Verfügbarkeit je Rasterposition.
+    // Schneller Zugriff: Energie-Verfügbarkeit je Produzenten-Rasterposition.
     let avail_at = |x: u32, y: u32| -> f64 {
         consumers
             .iter()
@@ -158,7 +199,7 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // nur frische Produktion deckeln.
     let before: Vec<(Resource, f64)> = Resource::ALL.iter().map(|r| (*r, stock.get(*r))).collect();
 
-    for tier in [Tier::Raw, Tier::Refined, Tier::Gate, Tier::Research] {
+    for tier in [Tier::Raw, Tier::Refined, Tier::Gate] {
         for (x, y, b) in grid.buildings() {
             if !b.is_operational() {
                 continue;
@@ -185,12 +226,8 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
                 continue;
             }
 
-            let headroom = if output.tier() == Tier::Research {
-                f64::INFINITY
-            } else {
-                (capacity - stock.get(output)).max(0.0)
-                    + consumption.get(&output).copied().unwrap_or(0.0)
-            };
+            let headroom = (capacity - stock.get(output)).max(0.0)
+                + consumption.get(&output).copied().unwrap_or(0.0);
 
             match output.recipe() {
                 // Roh: keine Eingänge, Förderung staut an der (verbrauchsbewussten) Decke.
@@ -218,13 +255,22 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     // Stoff knapp über die Decke geraten — der Überlauf verfällt. Bereits zuvor
     // über der Decke liegende Vorräte bleiben aber unangetastet.
     for (r, start) in before {
-        if r.tier() == Tier::Research {
-            continue;
-        }
         let ceiling = capacity.max(start);
         if stock.get(r) > ceiling {
             stock.set(r, ceiling);
         }
+    }
+
+    // --- 4. Forschung --------------------------------------------------------
+    // Das aktive Projekt zieht Material als Fluss (kriecht bei Mangel) und wird
+    // durch die oben mit Energie versorgten Einrichtungen beschleunigt. Forschung
+    // bleibt aus dem strukturellen Netto-Fluss (`net`) heraus — der Saldo zeigt
+    // die *Wirtschaft*, nicht den transienten Forschungsbedarf.
+    if let Some(r) = research {
+        let lab_power_energy: f64 = energy_avail[lab_offset..lab_offset + lab_count]
+            .iter()
+            .sum();
+        advance_research(stock, r, lab_power_energy, dt);
     }
 
     StepReport {
@@ -235,12 +281,87 @@ pub fn resolve_step(grid: &Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt
     }
 }
 
-/// Ein voller Simulationsschritt: erst **Produktion** ([`resolve_step`]), dann
-/// **Baufortschritt** ([`Grid::advance_construction`]). Baustellen ziehen ihr
-/// Material aus demselben globalen Pool — die in diesem Schritt geförderten
-/// Stoffe stehen dem Bau bereits zur Verfügung.
-pub fn advance(grid: &mut Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt: f64) -> StepReport {
-    let report = resolve_step(&*grid, stock, orbit_radius_km, dt);
+/// Schreibt das aktive Forschungsprojekt um `dt` Sekunden fort.
+///
+/// Material fließt kontinuierlich (kriecht bei Mangel, kein Einmalkauf, genau
+/// wie eine Baustelle). Betriebsbereite Forschungseinrichtungen **beschleunigen**
+/// das Projekt — gedrosselt durch Energie *und* Elektronik, die sie im Betrieb
+/// fressen (Elektronik-Sink). `lab_power_energy` ist die Summe der
+/// Energie-Verfügbarkeit aller laufenden Einrichtungen (jede in `[0,1]`); ohne
+/// Einrichtung läuft das Projekt mit Basistempo und ohne Stromkosten weiter.
+fn advance_research(
+    stock: &mut Stockpile,
+    research: &mut ResearchState,
+    lab_power_energy: f64,
+    dt: f64,
+) {
+    let Some(active) = research.active().copied() else {
+        return;
+    };
+    if active.progress >= 1.0 {
+        research.complete_active();
+        return;
+    }
+    let node = active.id.node();
+    if node.time <= 0.0 {
+        research.complete_active();
+        return;
+    }
+
+    // Einrichtungen: Tempo-Bonus, gedrosselt durch Elektronik (Betriebs-Sink).
+    // Fehlt Elektronik, fällt der Bonus weg (Projekt läuft mit Basistempo).
+    let elec_needed = LAB_ELECTRONICS_RATE * lab_power_energy * dt;
+    let elec_frac = if elec_needed > 0.0 {
+        (stock.get(Resource::Electronics) / elec_needed).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    if elec_needed > 0.0 {
+        stock.add(Resource::Electronics, -elec_needed * elec_frac);
+    }
+    let speed = 1.0 + LAB_SPEEDUP_PER_LAB * lab_power_energy * elec_frac;
+
+    let want = (dt / node.time * speed).min(1.0 - active.progress);
+    if want <= 0.0 {
+        return;
+    }
+
+    // Materiallimit über alle Projektkosten (weicher Abfall, keine Klippe).
+    let mut frac = 1.0_f64;
+    for (res, qty) in node.cost {
+        let need = qty * want;
+        if need > 0.0 {
+            frac = frac.min(stock.get(*res) / need);
+        }
+    }
+    let actual = want * frac.clamp(0.0, 1.0);
+    if actual <= 0.0 {
+        return;
+    }
+    for (res, qty) in node.cost {
+        stock.add(*res, -qty * actual);
+    }
+    let progress = active.progress + actual;
+    if progress >= 1.0 {
+        research.complete_active();
+    } else {
+        research.set_active_progress(progress);
+    }
+}
+
+/// Ein voller Simulationsschritt: **Produktion + Forschung** ([`step_core`]),
+/// dann **Baufortschritt** ([`Grid::advance_construction`]). Produktion,
+/// Forschung und Bau ziehen ihr Material aus demselben globalen Pool — die in
+/// diesem Schritt geförderten Stoffe stehen Forschung und Bau bereits zur
+/// Verfügung.
+pub fn advance(
+    grid: &mut Grid,
+    stock: &mut Stockpile,
+    research: &mut ResearchState,
+    orbit_radius_km: f64,
+    dt: f64,
+) -> StepReport {
+    let report = step_core(&*grid, stock, Some(research), orbit_radius_km, dt);
     grid.advance_construction(stock, dt);
     report
 }
@@ -249,6 +370,7 @@ pub fn advance(grid: &mut Grid, stock: &mut Stockpile, orbit_radius_km: f64, dt:
 mod tests {
     use super::*;
     use crate::planet::{Building, BuildingKind, Grid, Terrain};
+    use crate::research::{ResearchId, ResearchState};
     use crate::resource::Resource;
 
     const AU: f64 = SOLAR_REFERENCE_RADIUS_KM;
@@ -389,7 +511,7 @@ mod tests {
         };
         // Solar bei großem Radius → ~4 Energie; Bedarf 3 (Hütte) + 4 (Fab) = 7.
         let r = AU / (0.4_f64).sqrt();
-        let mut stocked = || {
+        let stocked = || {
             let mut s = Stockpile::new();
             s.set(Resource::Metals, 100_000.0);
             s.set(Resource::Silicates, 100_000.0);
@@ -434,9 +556,10 @@ mod tests {
             .unwrap();
 
         let mut stock = Stockpile::new();
+        let mut research = ResearchState::new();
         // Eine Stunde: Förderung füllt das Lager (Zentrale → Kapazität 600),
         // Depot (3600 s, 30 Metalle) wird fertig.
-        advance(&mut g, &mut stock, AU, 3_600.0);
+        advance(&mut g, &mut stock, &mut research, AU, 3_600.0);
         assert!(stock.get(Resource::Metals) > 400.0);
         assert!(g.tile(2, 0).unwrap().building.unwrap().is_operational());
     }
@@ -583,17 +706,78 @@ mod tests {
     }
 
     #[test]
-    fn research_lab_turns_electronics_into_research() {
+    fn research_project_consumes_material_and_completes() {
+        // „Legierungen": 100 Metalle Kosten, 1800 s Projektzeit, keine Einrichtung.
+        let g = Grid::new(1, 1, Terrain::Barren);
+        let mut stock = Stockpile::new();
+        stock.set(Resource::Metals, 1_000.0);
+        let mut research = ResearchState::new();
+        assert!(research.start(ResearchId::Alloys));
+
+        // Halbe Projektzeit → 50 % Fortschritt, 50 Metalle verbraucht.
+        let mut g2 = g.clone();
+        advance(&mut g2, &mut stock, &mut research, AU, 900.0);
+        let p = research.active().unwrap().progress;
+        assert!((p - 0.5).abs() < 1e-6, "Fortschritt {p}");
+        assert!((stock.get(Resource::Metals) - 950.0).abs() < 1e-6);
+
+        // Rest der Zeit → fertig, „Legierungen" erforscht, Hütte frei.
+        let mut g3 = g.clone();
+        advance(&mut g3, &mut stock, &mut research, AU, 900.0);
+        assert!(research.is_done(ResearchId::Alloys));
+        assert!(research.active().is_none());
+        assert!(research.is_building_unlocked(BuildingKind::Smelter));
+    }
+
+    #[test]
+    fn research_crawls_without_material() {
+        let mut g = Grid::new(1, 1, Terrain::Barren);
+        let mut stock = Stockpile::new(); // kein Metall
+        let mut research = ResearchState::new();
+        research.start(ResearchId::Alloys);
+        advance(&mut g, &mut stock, &mut research, AU, 1_000_000.0);
+        // Ohne Material kein Fortschritt (kriecht, blockt nicht).
+        assert_eq!(research.active().unwrap().progress, 0.0);
+        assert!(!research.is_done(ResearchId::Alloys));
+    }
+
+    #[test]
+    fn lab_accelerates_research() {
+        // Identisches Projekt, einmal ohne, einmal mit voll versorgter
+        // Forschungseinrichtung (Solar liefert Strom, Elektronik im Lager).
+        let run = |with_lab: bool| -> f64 {
+            let mut g = Grid::new(2, 1, Terrain::Barren);
+            if with_lab {
+                g.place(0, 0, Building::new(BuildingKind::ResearchLab)).unwrap();
+                g.place(1, 0, Building::new(BuildingKind::SolarCollector))
+                    .unwrap();
+            }
+            let mut stock = Stockpile::new();
+            stock.set(Resource::Metals, 10_000.0);
+            stock.set(Resource::Electronics, 10_000.0);
+            let mut research = ResearchState::new();
+            research.start(ResearchId::Alloys);
+            advance(&mut g, &mut stock, &mut research, AU, 600.0);
+            research.active().map(|a| a.progress).unwrap_or(1.0)
+        };
+        let without = run(false);
+        let with = run(true);
+        // Eine voll laufende Einrichtung verdoppelt grob das Tempo.
+        assert!(with > without + 1e-6, "Einrichtung beschleunigt nicht: {with} vs {without}");
+        assert!((with - 2.0 * without).abs() < 1e-3, "≈ doppeltes Tempo erwartet: {with} vs {without}");
+    }
+
+    #[test]
+    fn idle_lab_draws_no_energy() {
+        // Ohne aktives Projekt zieht eine Einrichtung keinen Strom.
         let mut g = Grid::new(2, 1, Terrain::Barren);
         g.place(0, 0, Building::new(BuildingKind::ResearchLab)).unwrap();
         g.place(1, 0, Building::new(BuildingKind::SolarCollector))
             .unwrap();
         let mut stock = Stockpile::new();
-        stock.set(Resource::Electronics, 1000.0);
-        resolve_step(&g, &mut stock, AU, 100.0);
-        // 0.3/s × 100 s = 30 Forschung, verbraucht 30 Elektronik.
-        assert!((stock.get(Resource::Research) - 30.0).abs() < 1e-6);
-        assert!((stock.get(Resource::Electronics) - 970.0).abs() < 1e-6);
+        let mut research = ResearchState::new(); // kein aktives Projekt
+        let rep = advance(&mut g, &mut stock, &mut research, AU, 100.0);
+        assert_eq!(rep.energy_demand, 0.0);
     }
 
     #[test]

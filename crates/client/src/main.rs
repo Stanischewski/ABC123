@@ -19,8 +19,8 @@
 
 use eframe::egui;
 use gamecore::{
-    Building, BuildingKind, BodyKind, Grid, PlaceError, Resource, StepReport, Stockpile, System,
-    Terrain, Tier,
+    Building, BuildingKind, BodyKind, Grid, PlaceError, ResearchId, ResearchState, Resource,
+    StepReport, Stockpile, System, Terrain, Unlock,
 };
 
 /// Gebäude in der Palette, in Bau-Reihenfolge.
@@ -72,6 +72,7 @@ fn main() {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum View {
     Build,
+    Research,
     System,
 }
 
@@ -83,6 +84,9 @@ enum Action {
     Demolish(u32, u32),
     SetEnabled(u32, u32, bool),
     SetPriority(u32, u32, i32),
+    StartResearch(ResearchId),
+    CancelResearch,
+    SetResearchPriority(i32),
 }
 
 /// Auswählbare Prioritätsstufen (höher = wird bei Energie-Knappheit zuerst
@@ -102,6 +106,7 @@ struct BuildApp {
     grid: Grid,
     system: System,
     stock: Stockpile,
+    research: ResearchState,
     sim_time: f64,
     orbit_radius_km: f64,
     selected: BuildingKind,
@@ -126,6 +131,7 @@ impl BuildApp {
             grid: gamecore::demo_home_planet(),
             system,
             stock,
+            research: ResearchState::new(),
             sim_time: 0.0,
             orbit_radius_km,
             selected: BuildingKind::MetalMine,
@@ -134,22 +140,35 @@ impl BuildApp {
         }
     }
 
-    /// Schreibt die Simulation um `dt` Sekunden fort (Produktion + Baufortschritt).
+    /// Schreibt die Simulation um `dt` Sekunden fort (Produktion + Forschung +
+    /// Baufortschritt). Loggt frisch abgeschlossene Forschungen.
     fn step(&mut self, dt: f64) {
         if dt <= 0.0 {
             return;
         }
         self.sim_time += dt;
-        let _ = gamecore::advance(&mut self.grid, &mut self.stock, self.orbit_radius_km, dt);
+        let before = self.research.completed().len();
+        let _ = gamecore::advance(
+            &mut self.grid,
+            &mut self.stock,
+            &mut self.research,
+            self.orbit_radius_km,
+            dt,
+        );
+        if self.research.completed().len() > before {
+            if let Some(id) = self.research.completed().last() {
+                self.log.push(format!("Forschung abgeschlossen: {}", id.name()));
+            }
+        }
     }
 
-    /// Sim-Bericht für ein gegebenes Raster — über eine 1-Stunden-Vorschau auf
-    /// Kopien, ohne den echten Zustand zu ändern. Liefert u. a. den
-    /// strukturellen Netto-Fluss je Stoff (Überschuss/Defizit).
+    /// Struktureller Sim-Bericht für ein gegebenes Raster — eine 1-Stunden-
+    /// Vorschau auf einer Lager-Kopie, ohne den echten Zustand zu ändern. Nutzt
+    /// [`gamecore::resolve_step`] (forschungsfrei), da nur der Netto-Fluss je
+    /// Stoff (Überschuss/Defizit) und das Energiebudget interessieren.
     fn grid_report(&self, grid: &Grid) -> StepReport {
-        let mut g = grid.clone();
         let mut s = self.stock.clone();
-        gamecore::advance(&mut g, &mut s, self.orbit_radius_km, 3_600.0)
+        gamecore::resolve_step(grid, &mut s, self.orbit_radius_km, 3_600.0)
     }
 
     /// Projizierte Auswirkung, wenn `kind` an `(x, y)` gebaut würde — die
@@ -197,6 +216,13 @@ impl BuildApp {
 
     /// Setzt eine Baustelle (kein Einmalkauf — Material fließt über die Bauzeit).
     fn build(&mut self, x: u32, y: u32, kind: BuildingKind) {
+        if !self.research.is_building_unlocked(kind) {
+            if let Some(id) = kind.required_research() {
+                self.log
+                    .push(format!("{}: erst {} erforschen", name(kind), id.name()));
+            }
+            return;
+        }
         match self.grid.place(x, y, Building::construction_site(kind)) {
             Ok(()) => self.log.push(format!("Baustelle: {} @ ({x},{y})", name(kind))),
             Err(PlaceError::WrongTerrain) => self
@@ -243,6 +269,28 @@ impl BuildApp {
                 .push(format!("Priorität {} @ ({x},{y})", priority_name(p)));
         }
     }
+
+    /// Startet ein Forschungsprojekt (sofern keines läuft und freigeschaltet).
+    fn start_research(&mut self, id: ResearchId) {
+        if self.research.start(id) {
+            self.log.push(format!("Forschung gestartet: {}", id.name()));
+        }
+    }
+
+    /// Bricht das laufende Forschungsprojekt ab (Fortschritt verfällt).
+    fn cancel_research(&mut self) {
+        if let Some(a) = self.research.cancel() {
+            self.log
+                .push(format!("Forschung abgebrochen: {}", a.id.name()));
+        }
+    }
+
+    /// Setzt die Energie-Priorität der Forschung.
+    fn set_research_priority(&mut self, p: i32) {
+        self.research.set_priority(p);
+        self.log
+            .push(format!("Forschungs-Priorität: {}", priority_name(p)));
+    }
 }
 
 impl eframe::App for BuildApp {
@@ -255,6 +303,7 @@ impl eframe::App for BuildApp {
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut view, View::Build, "Bau-Ebene");
+                ui.selectable_value(&mut view, View::Research, "Forschung");
                 ui.selectable_value(&mut view, View::System, "System");
                 ui.separator();
                 ui.label(format!("Sim-Zeit: {:.2} Tage", self.sim_time / 86_400.0));
@@ -274,6 +323,10 @@ impl eframe::App for BuildApp {
                 self.show_build_side(ctx, &mut selected);
                 self.show_build_grid(ctx, selected, &mut actions);
             }
+            View::Research => {
+                self.show_research_side(ctx, &mut actions);
+                self.show_research_view(ctx, &mut actions);
+            }
             View::System => {
                 self.show_system_side(ctx);
                 self.show_system_view(ctx);
@@ -291,6 +344,9 @@ impl eframe::App for BuildApp {
                 Action::Demolish(x, y) => self.demolish(x, y),
                 Action::SetEnabled(x, y, on) => self.set_enabled(x, y, on),
                 Action::SetPriority(x, y, p) => self.set_priority(x, y, p),
+                Action::StartResearch(id) => self.start_research(id),
+                Action::CancelResearch => self.cancel_research(),
+                Action::SetResearchPriority(p) => self.set_research_priority(p),
             }
         }
 
@@ -311,7 +367,16 @@ impl BuildApp {
                 ui.heading("Bauten");
                 for kind in PALETTE {
                     let label = format!("{}  ({})", name(kind), cost_string(kind.spec().build_cost));
-                    ui.selectable_value(selected, kind, label);
+                    if self.research.is_building_unlocked(kind) {
+                        ui.selectable_value(selected, kind, label);
+                    } else {
+                        let req = kind.required_research().map(|r| r.name()).unwrap_or("");
+                        ui.add_enabled(
+                            false,
+                            egui::SelectableLabel::new(false, format!("🔒 {label}")),
+                        )
+                        .on_disabled_hover_text(format!("Erst {req} erforschen"));
+                    }
                 }
 
                 // Live-Vorschau (1 Sim-Stunde): struktureller Saldo + Energie.
@@ -325,18 +390,13 @@ impl BuildApp {
                     for (i, r) in Resource::ALL.iter().enumerate() {
                         ui.label(format!("{r:?}"));
                         let amt = self.stock.get(*r);
-                        if r.tier() == Tier::Research {
-                            // Forschung ist eine Währung, kein Lagergut → keine Decke.
-                            ui.label(format!("{amt:.0}"));
+                        let full = amt >= cap - 0.5;
+                        let col = if full {
+                            egui::Color32::from_rgb(200, 90, 80)
                         } else {
-                            let full = amt >= cap - 0.5;
-                            let col = if full {
-                                egui::Color32::from_rgb(200, 90, 80)
-                            } else {
-                                ui.visuals().text_color()
-                            };
-                            ui.colored_label(col, format!("{amt:.0} / {cap:.0}"));
-                        }
+                            ui.visuals().text_color()
+                        };
+                        ui.colored_label(col, format!("{amt:.0} / {cap:.0}"));
                         // Struktureller Saldo (Einheiten/Stunde), unabhängig vom Lager.
                         let (txt, col) = rate_label(rep.net_flow[i] * 3_600.0);
                         ui.colored_label(col, txt);
@@ -410,7 +470,9 @@ impl BuildApp {
                         let resp = if resp.hovered() {
                             let tip = match tile.building {
                                 Some(_) => self.tile_tooltip(x, y, &tile),
-                                None if selected.can_build_on(tile.terrain) => {
+                                None if selected.can_build_on(tile.terrain)
+                                    && self.research.is_building_unlocked(selected) =>
+                                {
                                     self.placement_tooltip(x, y, selected)
                                 }
                                 None => terrain_name(tile.terrain).to_string(),
@@ -435,17 +497,27 @@ impl BuildApp {
                                 ui.menu_button("Bauen", |ui| {
                                     let mut any = false;
                                     for kind in PALETTE {
-                                        if kind.can_build_on(tile.terrain) {
-                                            any = true;
-                                            let label = format!(
-                                                "{}  ({})",
-                                                name(kind),
-                                                cost_string(kind.spec().build_cost)
-                                            );
+                                        if !kind.can_build_on(tile.terrain) {
+                                            continue;
+                                        }
+                                        any = true;
+                                        let label = format!(
+                                            "{}  ({})",
+                                            name(kind),
+                                            cost_string(kind.spec().build_cost)
+                                        );
+                                        if self.research.is_building_unlocked(kind) {
                                             if ui.button(label).clicked() {
                                                 actions.push(Action::Build(x, y, kind));
                                                 ui.close_menu();
                                             }
+                                        } else {
+                                            let req =
+                                                kind.required_research().map(|r| r.name()).unwrap_or("");
+                                            ui.add_enabled(false, egui::Button::new(format!("🔒 {label}")))
+                                                .on_disabled_hover_text(format!(
+                                                    "Erst {req} erforschen"
+                                                ));
                                         }
                                     }
                                     if !any {
@@ -569,6 +641,132 @@ impl BuildApp {
             }
             None => terrain_name(tile.terrain).to_string(),
         }
+    }
+
+    /// Linkes Panel der Forschungs-Ansicht: aktives Projekt, Priorität, Hinweise.
+    fn show_research_side(&self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        egui::SidePanel::left("research_side")
+            .resizable(false)
+            .min_width(240.0)
+            .show(ctx, |ui| {
+                ui.heading("Forschung");
+                ui.small("Projekte sind Baustellen: Material fließt über die Zeit und kriecht bei Mangel.");
+                ui.separator();
+
+                match self.research.active() {
+                    Some(a) => {
+                        ui.label(format!("Aktiv: {}", a.id.name()));
+                        ui.add(
+                            egui::ProgressBar::new(a.progress as f32)
+                                .text(format!("{:.0}%", a.progress * 100.0)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label("Energie-Priorität:");
+                        ui.horizontal(|ui| {
+                            for (label, val) in PRIORITY_LEVELS {
+                                if ui
+                                    .selectable_label(self.research.priority() == val, label)
+                                    .clicked()
+                                {
+                                    actions.push(Action::SetResearchPriority(val));
+                                }
+                            }
+                        });
+                        ui.add_space(4.0);
+                        if ui.button("Abbrechen").clicked() {
+                            actions.push(Action::CancelResearch);
+                        }
+                    }
+                    None => {
+                        ui.label("Kein Projekt aktiv.");
+                        ui.small("Wähle rechts einen Knoten und starte ihn.");
+                    }
+                }
+
+                ui.separator();
+                ui.heading("Forschungseinrichtung");
+                ui.small(
+                    "Senkt im Betrieb die Projektzeit (Beschleuniger) und frisst dabei \
+                     Elektronik + Energie. Optional — Projekte laufen auch ohne sie.",
+                );
+
+                ui.separator();
+                ui.heading("Log");
+                for line in self.log.iter().rev().take(8) {
+                    ui.small(line);
+                }
+            });
+    }
+
+    /// Zentrale Forschungs-Ansicht: der Freischaltungs-Baum als Knotenliste mit
+    /// Status, Kosten und Start-Knopf.
+    fn show_research_view(&self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Freischaltungs-Baum (Phase 1)");
+            ui.small("Forschung schaltet frei — kein Prozentbonus. Genau ein Projekt zur Zeit.");
+            ui.add_space(6.0);
+
+            let busy = self.research.active().is_some();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for id in gamecore::research::ALL {
+                    let node = id.node();
+                    let done = self.research.is_done(id);
+                    let active = self.research.active().map(|a| a.id) == Some(id);
+                    let can_start = self.research.can_start(id);
+
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            let (badge, col) = if done {
+                                ("✓", egui::Color32::from_rgb(90, 180, 100))
+                            } else if active {
+                                ("▶", egui::Color32::from_rgb(230, 180, 80))
+                            } else if can_start {
+                                ("○", ui.visuals().text_color())
+                            } else {
+                                ("🔒", egui::Color32::from_gray(130))
+                            };
+                            ui.colored_label(col, badge);
+                            ui.strong(node.name);
+                        });
+                        ui.label(node.desc);
+                        ui.small(format!(
+                            "Kosten: {} · Zeit {:.1} h",
+                            cost_string(node.cost),
+                            node.time / 3_600.0
+                        ));
+                        ui.small(unlock_text(node.unlock));
+
+                        if done {
+                            ui.colored_label(egui::Color32::from_rgb(90, 180, 100), "erforscht");
+                        } else if active {
+                            let p = self.research.active().map(|a| a.progress).unwrap_or(0.0);
+                            ui.add(
+                                egui::ProgressBar::new(p as f32)
+                                    .desired_width(180.0)
+                                    .text(format!("{:.0}%", p * 100.0)),
+                            );
+                        } else if can_start {
+                            if ui
+                                .add_enabled(!busy, egui::Button::new("Starten"))
+                                .on_disabled_hover_text("Erst das laufende Projekt beenden")
+                                .clicked()
+                            {
+                                actions.push(Action::StartResearch(id));
+                            }
+                        } else {
+                            let missing: Vec<&str> = node
+                                .prereqs
+                                .iter()
+                                .filter(|p| !self.research.is_done(**p))
+                                .map(|p| p.name())
+                                .collect();
+                            ui.small(format!("benötigt: {}", missing.join(", ")));
+                        }
+                    });
+                    ui.add_space(4.0);
+                }
+            });
+        });
     }
 
     fn show_system_side(&self, ctx: &egui::Context) {
@@ -791,6 +989,15 @@ fn rate_label(rate_per_hour: f64) -> (String, egui::Color32) {
             format!("{:.0}/h", rate_per_hour),
             egui::Color32::from_rgb(200, 90, 80),
         )
+    }
+}
+
+/// Beschreibt, was ein Forschungsknoten freischaltet.
+fn unlock_text(unlock: Option<Unlock>) -> String {
+    match unlock {
+        Some(Unlock::Building(k)) => format!("→ schaltet {} frei", name(k)),
+        Some(Unlock::Ascent(s)) => format!("→ schaltet {s} frei"),
+        None => "→ öffnet Folge-Forschung".to_string(),
     }
 }
 

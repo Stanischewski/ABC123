@@ -29,15 +29,11 @@ pub enum Resource {
     Electronics,
     // Gate-Gut (Tier 2, spät)
     Composite,
-    // Forschungspunkte — keine *Material*-Ressource, sondern eine Währung, die
-    // sich aus der Forschungseinrichtung ansammelt (Elektronik-Sink). Der echte
-    // Tech-Baum, der sie ausgibt, ist späteres Werk (DESIGN.md §7).
-    Research,
 }
 
 impl Resource {
     /// Anzahl der Ressourcen — Länge ausgerichteter Arrays (z. B. Netto-Flüsse).
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 6;
 
     /// Position in [`Resource::ALL`] — Index für ausgerichtete Arrays.
     pub fn index(self) -> usize {
@@ -48,7 +44,6 @@ impl Resource {
             Resource::Alloys => 3,
             Resource::Electronics => 4,
             Resource::Composite => 5,
-            Resource::Research => 6,
         }
     }
 
@@ -61,7 +56,6 @@ impl Resource {
         Resource::Alloys,
         Resource::Electronics,
         Resource::Composite,
-        Resource::Research,
     ];
 
     /// Verarbeitungsstufe.
@@ -70,7 +64,6 @@ impl Resource {
             Resource::Metals | Resource::Silicates | Resource::Gases => Tier::Raw,
             Resource::Alloys | Resource::Electronics => Tier::Refined,
             Resource::Composite => Tier::Gate,
-            Resource::Research => Tier::Research,
         }
     }
 
@@ -103,13 +96,6 @@ impl Resource {
                 inputs: &[(Resource::Alloys, 1.0), (Resource::Electronics, 1.0)],
                 energy_cost: 5.0,
             }),
-
-            // Forschung ← Elektronik (+ Energie). Reiner Elektronik-Sink.
-            Resource::Research => Some(Recipe {
-                output: Resource::Research,
-                inputs: &[(Resource::Electronics, 1.0)],
-                energy_cost: 2.0,
-            }),
         }
     }
 }
@@ -120,8 +106,6 @@ pub enum Tier {
     Raw,
     Refined,
     Gate,
-    /// Forschung — wird nach den Material-Stufen aufgelöst (verbraucht Veredeltes).
-    Research,
 }
 
 /// Ein Produktionsrezept: feste Eingangsmengen + Energiekosten je Output-Einheit.
