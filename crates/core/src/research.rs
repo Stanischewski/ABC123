@@ -42,16 +42,22 @@ pub enum ResearchId {
     Rockets,
     /// Krone: schaltet die Satelliten-Nutzlasten frei.
     Satellites,
+    /// Ausbau: erlaubt Gebäude-Stufe 2.
+    UpgradeII,
+    /// Ausbau: erlaubt Gebäude-Stufe 3.
+    UpgradeIII,
 }
 
-/// Alle Knoten in kanonischer Reihenfolge (Wurzeln → Stämme → Krone).
-pub const ALL: [ResearchId; 6] = [
+/// Alle Knoten in kanonischer Reihenfolge (Wurzeln → Stämme → Krone → Ausbau).
+pub const ALL: [ResearchId; 8] = [
     ResearchId::Alloys,
     ResearchId::Electronics,
     ResearchId::ComputerTech,
     ResearchId::DriveTech,
     ResearchId::Rockets,
     ResearchId::Satellites,
+    ResearchId::UpgradeII,
+    ResearchId::UpgradeIII,
 ];
 
 /// Was ein abgeschlossener Knoten freischaltet.
@@ -59,6 +65,9 @@ pub const ALL: [ResearchId; 6] = [
 pub enum Unlock {
     /// Macht ein Gebäude baubar.
     Building(BuildingKind),
+    /// Hebt die erlaubte Gebäude-Ausbaustufe auf den angegebenen Wert
+    /// (`crate::planet::MAX_LEVEL` ist die harte Obergrenze).
+    UpgradeLevel(u32),
     /// Eine Aufstiegs-Fähigkeit. Das zugehörige Subsystem (Startrampe,
     /// Satelliten-Nutzlasten) ist eigenes, späteres Werk — hier nur als
     /// erreichte Fähigkeit vermerkt.
@@ -135,6 +144,22 @@ impl ResearchId {
                 time: 10_800.0,
                 unlock: Some(Unlock::Ascent("Satellit-Nutzlasten (Scan + Forschung)")),
                 desc: "Schaltet Scan- und Forschungs-Satellit frei.",
+            },
+            ResearchId::UpgradeII => ResearchNode {
+                name: "Ausbaustufe II",
+                prereqs: &[ResearchId::Alloys],
+                cost: &[(Metals, 120.0), (Alloys, 40.0)],
+                time: 5_400.0,
+                unlock: Some(Unlock::UpgradeLevel(2)),
+                desc: "Erlaubt den Ausbau von Gebäuden auf Stufe 2 (mehr Leistung je Kachel).",
+            },
+            ResearchId::UpgradeIII => ResearchNode {
+                name: "Ausbaustufe III",
+                prereqs: &[ResearchId::UpgradeII],
+                cost: &[(Alloys, 120.0), (Electronics, 80.0)],
+                time: 9_000.0,
+                unlock: Some(Unlock::UpgradeLevel(3)),
+                desc: "Erlaubt den Ausbau von Gebäuden auf Stufe 3.",
             },
         }
     }
@@ -251,6 +276,18 @@ impl ResearchState {
             Some(id) => self.is_done(id),
         }
     }
+
+    /// Die höchste Gebäude-Ausbaustufe, die die bisherige Forschung erlaubt
+    /// (Stufe 1 ohne Forschung; [`Unlock::UpgradeLevel`]-Knoten heben sie an).
+    pub fn max_building_level(&self) -> u32 {
+        let mut level = 1;
+        for id in &self.completed {
+            if let Some(Unlock::UpgradeLevel(l)) = id.node().unlock {
+                level = level.max(l);
+            }
+        }
+        level
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +326,26 @@ mod tests {
         assert!(!r.start(ResearchId::Electronics));
         r.cancel();
         assert!(r.start(ResearchId::Electronics));
+    }
+
+    #[test]
+    fn upgrade_levels_unlock_via_research() {
+        let mut r = ResearchState::new();
+        assert_eq!(r.max_building_level(), 1);
+        // Ausbaustufe II braucht Legierungen.
+        assert!(!r.can_start(ResearchId::UpgradeII));
+        for id in [ResearchId::Alloys, ResearchId::UpgradeII] {
+            assert!(r.start(id));
+            r.set_active_progress(1.0);
+            r.complete_active();
+        }
+        assert_eq!(r.max_building_level(), 2);
+        // Stufe III erst nach II.
+        assert!(r.can_start(ResearchId::UpgradeIII));
+        r.start(ResearchId::UpgradeIII);
+        r.set_active_progress(1.0);
+        r.complete_active();
+        assert_eq!(r.max_building_level(), 3);
     }
 
     #[test]

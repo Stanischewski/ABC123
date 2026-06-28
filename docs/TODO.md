@@ -40,9 +40,12 @@ Legende: `[x]` erledigt · `[ ]` offen · `[~]` teilweise.
     (senkt Projektzeit, frisst im Betrieb Elektronik + Energie)
   - [x] Gebäude-Freischaltung verdrahtet: Hütte ← *Legierungen*, Elektronikfabrik ← *Elektronik*
   - [x] egui-Forschungs-Tab: Baum mit Status, Projekt starten/abbrechen, Energie-Priorität
+  - [x] Stufen-Forschung: Ausbaustufe II/III heben die erlaubte Gebäude-Stufe
   - [~] Aufstiegs-Freischaltungen (Startrampe-Startklasse, Satellit-Nutzlasten) als
     Fähigkeit im Baum vermerkt; konkrete Gebäude/Subsystem folgen (s. Aufstieg)
-- [ ] **Gebäude-Upgrades**: dieselbe Bau-Mechanik auf bestehender Kachel (Stufen)
+- [x] **Gebäude-Upgrades**: dieselbe Bau-Mechanik auf bestehender Kachel (Stufen 1–3);
+  Upgrade macht das Gebäude inert (wie Baustelle), höhere Stufen skalieren Output/Lager/
+  Energie; Stufen per Forschung (Ausbaustufe II/III) freigeschaltet; Ausbau abbrechbar
 - [ ] **Balance-Pass**: Förderraten, Energiekosten, Bauzeiten, Adjazenz-Stärke (Platzhalter → tunen)
 - [ ] Startrampe (Riegel zur Orbit-Ebene, upgradebare Startklasse) — braucht Aufstiegs-Subsystem
 - [ ] Verteidigungsanlage (planetar, Legierungs-Sink) — erst mit Kampf (Phase 2) sinnvoll

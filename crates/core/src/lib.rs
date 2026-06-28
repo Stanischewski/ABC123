@@ -36,7 +36,7 @@ pub mod time;
 pub use economy::{allocate_energy, logistics_efficiency, EnergyDemand, Producer, Stockpile};
 pub use math::Vec2;
 pub use orbit::{OrbitalElements, MU_SUN};
-pub use planet::{Building, BuildingKind, BuildingSpec, Grid, PlaceError, Terrain, Tile};
+pub use planet::{Building, BuildingKind, BuildingSpec, Grid, PlaceError, Terrain, Tile, MAX_LEVEL};
 pub use production::{advance, resolve_step, StepReport};
 pub use research::{ActiveProject, ResearchId, ResearchNode, ResearchState, Unlock};
 pub use resource::{Recipe, Resource, Tier};

@@ -21,6 +21,28 @@ pub const ADJACENCY_CAP: f64 = 1.5;
 /// Lager-Grundkapazität je Stoff, auch ohne Lagergebäude (Bootstrap-Floor).
 pub const STORAGE_BASE: f64 = 100.0;
 
+/// Höchste Ausbaustufe eines Gebäudes (harte Obergrenze; Forschung schaltet die
+/// Stufen einzeln frei, siehe [`crate::research`]).
+pub const MAX_LEVEL: u32 = 3;
+
+/// Leistungs-Faktor einer Ausbaustufe — skaliert Output, Lager, Energieausstoß
+/// und Treibstoffdurchsatz (Stufe 1 = 1.0, dann +0.6 je Stufe). Platzhalter.
+pub fn level_output_factor(level: u32) -> f64 {
+    1.0 + 0.6 * (level.saturating_sub(1) as f64)
+}
+
+/// Energiebedarfs-Faktor einer Ausbaustufe — wächst langsamer als die Leistung
+/// (+0.4 je Stufe), höhere Stufen sind also effizienter pro Einheit.
+pub fn level_demand_factor(level: u32) -> f64 {
+    1.0 + 0.4 * (level.saturating_sub(1) as f64)
+}
+
+/// Kosten-/Zeit-Faktor, um eine Stufe zu *erreichen* (×1.5 je Stufe). Stufe 1 =
+/// Erstbau (1.0), Stufe 2 = ×1.5, Stufe 3 = ×2.25.
+pub fn level_cost_factor(level: u32) -> f64 {
+    1.5_f64.powi(level.saturating_sub(1) as i32)
+}
+
 /// Geländeprofil einer Kachel. Bindet Rohstoffe an Orte (DESIGN.md §4.1):
 /// jeder Rohstoff hängt an *einem* Gelände, damit Förder-Platzierung zählt und
 /// Planeten unterschiedliche Profile bekommen.
@@ -281,6 +303,10 @@ fn default_progress() -> f64 {
     1.0
 }
 
+fn default_level() -> u32 {
+    1
+}
+
 /// Eine platzierte Struktur samt Drossel-Priorität (höher = wird bei
 /// Energie-/Input-Knappheit zuerst bedient), Ein/Aus-Schalter und
 /// Baufortschritt. Ein ausgeschaltetes *oder* noch im Bau befindliches Gebäude
@@ -292,19 +318,25 @@ pub struct Building {
     pub priority: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// Baufortschritt `0.0..=1.0`. `< 1.0` = Baustelle (inert), `1.0` = fertig.
+    /// Baufortschritt `0.0..=1.0`. `< 1.0` = Baustelle bzw. laufendes Upgrade
+    /// (inert), `1.0` = fertig.
     #[serde(default = "default_progress")]
     pub progress: f64,
+    /// Ausbaustufe `1..=MAX_LEVEL`. Bei `progress < 1.0` ist dies die *angestrebte*
+    /// Stufe (während Erstbau 1, während eines Upgrades die Zielstufe).
+    #[serde(default = "default_level")]
+    pub level: u32,
 }
 
 impl Building {
-    /// Ein fertiges, betriebsbereites Gebäude (Fortschritt 1.0).
+    /// Ein fertiges, betriebsbereites Gebäude (Stufe 1, Fortschritt 1.0).
     pub fn new(kind: BuildingKind) -> Self {
         Building {
             kind,
             priority: 0,
             enabled: true,
             progress: 1.0,
+            level: 1,
         }
     }
 
@@ -314,10 +346,11 @@ impl Building {
             priority,
             enabled: true,
             progress: 1.0,
+            level: 1,
         }
     }
 
-    /// Eine frische Baustelle (Fortschritt 0.0); wird über die Bauzeit
+    /// Eine frische Baustelle (Stufe 1, Fortschritt 0.0); wird über die Bauzeit
     /// fertiggestellt (siehe [`Grid::advance_construction`]).
     pub fn construction_site(kind: BuildingKind) -> Self {
         Building {
@@ -325,6 +358,7 @@ impl Building {
             priority: 0,
             enabled: true,
             progress: 0.0,
+            level: 1,
         }
     }
 
@@ -333,9 +367,57 @@ impl Building {
         self.enabled && self.progress >= 1.0
     }
 
-    /// Noch im Bau (Fortschritt < 1.0).
+    /// Noch im Bau oder im Upgrade (Fortschritt < 1.0).
     pub fn under_construction(&self) -> bool {
         self.progress < 1.0
+    }
+
+    /// Mitten in einem Upgrade (inert, Zielstufe ≥ 2 noch nicht erreicht) — im
+    /// Unterschied zum Erstbau (Stufe 1).
+    pub fn is_upgrading(&self) -> bool {
+        self.progress < 1.0 && self.level >= 2
+    }
+
+    /// Effektive Basisrate auf der aktuellen Stufe (Output-Einheiten/Sekunde).
+    pub fn effective_rate(&self) -> f64 {
+        self.kind.spec().base_rate * level_output_factor(self.level)
+    }
+
+    /// Effektiver Energieausstoß auf der aktuellen Stufe (Kraftwerke).
+    pub fn energy_output(&self) -> f64 {
+        self.kind.spec().energy_output * level_output_factor(self.level)
+    }
+
+    /// Effektiver Treibstoffdurchsatz auf der aktuellen Stufe (Fusion).
+    pub fn fuel_rate(&self) -> f64 {
+        self.kind.spec().fuel_rate * level_output_factor(self.level)
+    }
+
+    /// Effektiver Energiebedarf auf der aktuellen Stufe (Verbraucher).
+    pub fn energy_demand(&self) -> f64 {
+        self.kind.spec().energy_demand * level_demand_factor(self.level)
+    }
+
+    /// Effektive Lagerkapazität, die dieses Gebäude beisteuert (stufenskaliert).
+    pub fn storage(&self) -> f64 {
+        self.kind.storage() * level_output_factor(self.level)
+    }
+
+    /// Materialkosten, um die *aktuelle* Stufe zu erreichen (Erstbau oder
+    /// Upgrade) — die Basiskosten skaliert mit dem Stufen-Kostenfaktor.
+    pub fn build_cost(&self) -> Vec<(Resource, f64)> {
+        let f = level_cost_factor(self.level);
+        self.kind
+            .spec()
+            .build_cost
+            .iter()
+            .map(|(r, q)| (*r, q * f))
+            .collect()
+    }
+
+    /// Bauzeit, um die aktuelle Stufe zu erreichen (stufenskaliert).
+    pub fn build_time(&self) -> f64 {
+        self.kind.spec().build_time * level_cost_factor(self.level)
     }
 }
 
@@ -457,6 +539,42 @@ impl Grid {
         false
     }
 
+    /// Beginnt ein Upgrade auf die nächste Stufe: das Gebäude wird **inert**
+    /// (wie eine Baustelle) und über seine — höhere — Bauzeit/-kosten erneut
+    /// fertiggestellt. Erlaubt nur, wenn es betriebsbereit ist (kein laufender
+    /// Bau) und die Zielstufe sowohl die harte Obergrenze [`MAX_LEVEL`] als auch
+    /// das übergebene `max_level` (Forschungsschranke) einhält. Gibt `true` bei
+    /// Erfolg.
+    pub fn begin_upgrade(&mut self, x: u32, y: u32, max_level: u32) -> bool {
+        if let Some(i) = self.index(x, y) {
+            if let Some(b) = &mut self.tiles[i].building {
+                let cap = max_level.min(MAX_LEVEL);
+                if b.progress >= 1.0 && b.level < cap {
+                    b.level += 1;
+                    b.progress = 0.0;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Bricht ein laufendes Upgrade ab: das Gebäude kehrt auf seine vorige Stufe
+    /// zurück und ist sofort wieder betriebsbereit. Gibt `true` bei Erfolg (nur
+    /// für Gebäude, die gerade ausgebaut werden — nicht für den Erstbau).
+    pub fn cancel_upgrade(&mut self, x: u32, y: u32) -> bool {
+        if let Some(i) = self.index(x, y) {
+            if let Some(b) = &mut self.tiles[i].building {
+                if b.is_upgrading() {
+                    b.level -= 1;
+                    b.progress = 1.0;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Schreitet alle Baustellen um `dt` Sekunden voran.
     ///
     /// Bauen ist **kontinuierlicher Materialfluss**, kein Einmalkauf
@@ -472,22 +590,25 @@ impl Grid {
             if b.progress >= 1.0 {
                 continue;
             }
-            let spec = b.kind.spec();
-            if spec.build_time <= 0.0 {
+            // Kosten und Zeit gelten für die *aktuelle* Stufe (Erstbau oder
+            // Upgrade) — höhere Stufen kosten mehr und dauern länger.
+            let build_time = b.build_time();
+            if build_time <= 0.0 {
                 b.progress = 1.0;
                 completed += 1;
                 continue;
             }
+            let cost = b.build_cost();
 
             // Angestrebter Fortschritt dieses Schritts bei voller Versorgung.
-            let want = (dt / spec.build_time).min(1.0 - b.progress);
+            let want = (dt / build_time).min(1.0 - b.progress);
             if want <= 0.0 {
                 continue;
             }
 
             // Materiallimit über alle Baukosten (weicher Abfall, keine Klippe).
             let mut frac = 1.0_f64;
-            for (res, qty) in spec.build_cost {
+            for (res, qty) in &cost {
                 let need = qty * want;
                 if need > 0.0 {
                     frac = frac.min(stock.get(*res) / need);
@@ -498,7 +619,7 @@ impl Grid {
                 continue;
             }
 
-            for (res, qty) in spec.build_cost {
+            for (res, qty) in &cost {
                 stock.add(*res, -qty * actual);
             }
             b.progress += actual;
@@ -549,7 +670,7 @@ impl Grid {
         let from_buildings: f64 = self
             .buildings()
             .filter(|(_, _, b)| b.is_operational())
-            .map(|(_, _, b)| b.kind.storage())
+            .map(|(_, _, b)| b.storage())
             .sum();
         STORAGE_BASE + from_buildings
     }
@@ -766,6 +887,44 @@ mod tests {
             .unwrap();
         // Zentrale wirkt wie ein Lager → +10 % für die Mine.
         assert!((g.adjacency_multiplier(0, 0) - 1.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn upgrade_makes_building_inert_then_stronger() {
+        let mut g = Grid::new(1, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        let base_rate = g.tile(0, 0).unwrap().building.unwrap().effective_rate();
+
+        // Upgrade auf Stufe 2 (Forschungsschranke großzügig).
+        assert!(g.begin_upgrade(0, 0, 3));
+        let b = g.tile(0, 0).unwrap().building.unwrap();
+        assert_eq!(b.level, 2);
+        assert!(b.is_upgrading());
+        assert!(!b.is_operational(), "während des Upgrades inert");
+
+        // Fertigstellen: Upgradekosten (×1.5) über die längere Zeit.
+        let mut stock = Stockpile::new();
+        stock.set(Resource::Metals, 10_000.0);
+        g.advance_construction(&mut stock, 1_000_000.0);
+        let b = g.tile(0, 0).unwrap().building.unwrap();
+        assert!(b.is_operational());
+        assert_eq!(b.level, 2);
+        // Stufe 2 ist stärker (Faktor 1.6).
+        assert!((b.effective_rate() - base_rate * 1.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn upgrade_respects_research_cap_and_cancel_reverts() {
+        let mut g = Grid::new(1, 1, Terrain::Rock);
+        g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+        // Schranke Stufe 1 → kein Upgrade.
+        assert!(!g.begin_upgrade(0, 0, 1));
+        // Schranke Stufe 2 → erlaubt, dann abbrechen kehrt zu Stufe 1 zurück.
+        assert!(g.begin_upgrade(0, 0, 2));
+        assert!(g.cancel_upgrade(0, 0));
+        let b = g.tile(0, 0).unwrap().building.unwrap();
+        assert_eq!(b.level, 1);
+        assert!(b.is_operational());
     }
 
     #[test]

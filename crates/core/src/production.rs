@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use crate::economy::{allocate_energy, EnergyDemand, Stockpile};
-use crate::planet::{BuildingKind, Grid};
+use crate::planet::{level_demand_factor, level_output_factor, BuildingKind, Grid};
 use crate::research::{ResearchState, LAB_ELECTRONICS_RATE, LAB_SPEEDUP_PER_LAB};
 use crate::resource::{Resource, Tier};
 
@@ -93,21 +93,23 @@ fn step_core(
             continue;
         }
         let spec = b.kind.spec();
+        let energy_output = b.energy_output();
+        let fuel_rate = b.fuel_rate();
         if spec.solar {
-            energy_supply += spec.energy_output * solar_factor;
-        } else if spec.fuel_rate > 0.0 && spec.energy_output > 0.0 {
+            energy_supply += energy_output * solar_factor;
+        } else if fuel_rate > 0.0 && energy_output > 0.0 {
             // Fusion: durch vorhandenes Gas begrenzt (verbrennt Startbestand).
-            let needed = spec.fuel_rate * dt;
+            let needed = fuel_rate * dt;
             let frac = if needed > 0.0 {
                 (stock.get(Resource::Gases) / needed).clamp(0.0, 1.0)
             } else {
                 1.0
             };
-            stock.add(Resource::Gases, -spec.fuel_rate * dt * frac);
-            energy_supply += spec.energy_output * frac;
-            net[Resource::Gases.index()] -= spec.fuel_rate * frac;
-        } else if spec.energy_output > 0.0 {
-            energy_supply += spec.energy_output;
+            stock.add(Resource::Gases, -fuel_rate * dt * frac);
+            energy_supply += energy_output * frac;
+            net[Resource::Gases.index()] -= fuel_rate * frac;
+        } else if energy_output > 0.0 {
+            energy_supply += energy_output;
         }
     }
 
@@ -120,13 +122,14 @@ fn step_core(
             continue;
         }
         let spec = b.kind.spec();
-        if spec.output.is_some() && spec.energy_demand > 0.0 {
+        let energy_demand = b.energy_demand();
+        if spec.output.is_some() && energy_demand > 0.0 {
             consumers.push((
                 x,
                 y,
                 EnergyDemand {
                     priority: b.priority,
-                    amount: spec.energy_demand,
+                    amount: energy_demand,
                 },
             ));
         }
@@ -138,20 +141,24 @@ fn step_core(
     // sie inert (kein Bedarf, kein Verbrauch).
     let research_active = research.as_deref().is_some_and(|r| r.active().is_some());
     let research_priority = research.as_deref().map_or(0, |r| r.priority());
-    let lab_count = if research_active {
+    // Stufen der laufenden Einrichtungen: höhere Stufen ziehen mehr Strom und
+    // beschleunigen stärker (Faktoren unten bei der Forschungsstufe).
+    let lab_levels: Vec<u32> = if research_active {
         grid.buildings()
             .filter(|(_, _, b)| b.is_operational() && b.kind == BuildingKind::ResearchLab)
-            .count()
+            .map(|(_, _, b)| b.level)
+            .collect()
     } else {
-        0
+        Vec::new()
     };
 
     let mut demands: Vec<EnergyDemand> = consumers.iter().map(|(_, _, d)| *d).collect();
     let lab_offset = demands.len();
-    for _ in 0..lab_count {
+    let base_lab_demand = BuildingKind::ResearchLab.spec().energy_demand;
+    for &lvl in &lab_levels {
         demands.push(EnergyDemand {
             priority: research_priority,
-            amount: BuildingKind::ResearchLab.spec().energy_demand,
+            amount: base_lab_demand * level_demand_factor(lvl),
         });
     }
     let energy_demand: f64 = demands.iter().map(|d| d.amount).sum();
@@ -169,7 +176,6 @@ fn step_core(
     // --- 3. Produktion in Stufen-Reihenfolge ---------------------------------
     // Volle Lager üben Gegendruck aus: Produktion staut sich an der Kapazität,
     // statt überzulaufen — und Eingänge bleiben erhalten (keine Verschwendung).
-    // Forschung ist ausgenommen (eine Währung, kein Lagergut).
     //
     // Die Decke ist **verbrauchsbewusst**: ein Produzent darf so viel nachfüllen,
     // wie diesen Schritt auch verbraucht wird. Sonst würde ein Stoff, der zugleich
@@ -188,7 +194,7 @@ fn step_core(
         let spec = b.kind.spec();
         let Some(output) = spec.output else { continue };
         let Some(recipe) = output.recipe() else { continue };
-        let desired = spec.base_rate * grid.adjacency_multiplier(x, y) * avail_at(x, y) * dt;
+        let desired = b.effective_rate() * grid.adjacency_multiplier(x, y) * avail_at(x, y) * dt;
         for (res, qty) in recipe.inputs {
             *consumption.entry(*res).or_insert(0.0) += desired * qty;
         }
@@ -210,7 +216,7 @@ fn step_core(
                 continue;
             }
 
-            let rate = spec.base_rate * grid.adjacency_multiplier(x, y) * avail_at(x, y);
+            let rate = b.effective_rate() * grid.adjacency_multiplier(x, y) * avail_at(x, y);
 
             // Struktureller Netto-Fluss (ungeklemmt): volle Produktion und
             // voller Eingangsbedarf, unabhängig von Lagerdecke und Vorrat.
@@ -267,8 +273,11 @@ fn step_core(
     // bleibt aus dem strukturellen Netto-Fluss (`net`) heraus — der Saldo zeigt
     // die *Wirtschaft*, nicht den transienten Forschungsbedarf.
     if let Some(r) = research {
-        let lab_power_energy: f64 = energy_avail[lab_offset..lab_offset + lab_count]
+        // Beschleunigung je Einrichtung = Energie-Verfügbarkeit × Stufen-Leistung.
+        let lab_power_energy: f64 = lab_levels
             .iter()
+            .enumerate()
+            .map(|(i, &lvl)| energy_avail[lab_offset + i] * level_output_factor(lvl))
             .sum();
         advance_research(stock, r, lab_power_energy, dt);
     }
@@ -765,6 +774,34 @@ mod tests {
         // Eine voll laufende Einrichtung verdoppelt grob das Tempo.
         assert!(with > without + 1e-6, "Einrichtung beschleunigt nicht: {with} vs {without}");
         assert!((with - 2.0 * without).abs() < 1e-3, "≈ doppeltes Tempo erwartet: {with} vs {without}");
+    }
+
+    #[test]
+    fn higher_level_building_produces_more() {
+        // Dieselbe Mine, einmal Stufe 1, einmal auf Stufe 2 ausgebaut.
+        let make = |level2: bool| -> f64 {
+            let mut g = Grid::new(3, 1, Terrain::Rock);
+            g.set_terrain(1, 0, Terrain::Barren);
+            g.set_terrain(2, 0, Terrain::Barren);
+            g.place(0, 0, Building::new(BuildingKind::MetalMine)).unwrap();
+            g.place(1, 0, Building::new(BuildingKind::SolarCollector)).unwrap();
+            g.place(2, 0, Building::new(BuildingKind::Depot)).unwrap();
+            let mut stock = Stockpile::new();
+            if level2 {
+                assert!(g.begin_upgrade(0, 0, 3));
+                stock.set(Resource::Metals, 100_000.0);
+                g.advance_construction(&mut stock, 1_000_000.0);
+                stock.set(Resource::Metals, 0.0);
+            }
+            let mut research = ResearchState::new();
+            advance(&mut g, &mut stock, &mut research, AU, 100.0);
+            stock.get(Resource::Metals)
+        };
+        let l1 = make(false);
+        let l2 = make(true);
+        // Stufe 1: 1.0/s × 100 = 100. Stufe 2: ×1.6 → 160.
+        assert!((l1 - 100.0).abs() < 1e-6, "Stufe 1 = {l1}");
+        assert!((l2 - 160.0).abs() < 1e-6, "Stufe 2 = {l2}");
     }
 
     #[test]

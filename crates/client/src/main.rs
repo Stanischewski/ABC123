@@ -84,6 +84,8 @@ enum Action {
     Demolish(u32, u32),
     SetEnabled(u32, u32, bool),
     SetPriority(u32, u32, i32),
+    Upgrade(u32, u32),
+    CancelUpgrade(u32, u32),
     StartResearch(ResearchId),
     CancelResearch,
     SetResearchPriority(i32),
@@ -239,11 +241,11 @@ impl BuildApp {
     }
 
     /// Reißt ein Gebäude ab bzw. bricht eine Baustelle ab. Erstattet das bereits
-    /// verbaute Material (Kosten × Fortschritt) zurück.
+    /// verbaute Material der aktuellen Stufe (Kosten × Fortschritt) zurück.
     fn demolish(&mut self, x: u32, y: u32) {
         if let Some(b) = self.grid.remove(x, y) {
-            for (r, q) in b.kind.spec().build_cost {
-                self.stock.add(*r, q * b.progress);
+            for (r, q) in b.build_cost() {
+                self.stock.add(r, q * b.progress);
             }
             let verb = if b.under_construction() {
                 "Bau abgebrochen"
@@ -251,6 +253,36 @@ impl BuildApp {
                 "Abgerissen"
             };
             self.log.push(format!("{verb}: {} @ ({x},{y})", name(b.kind)));
+        }
+    }
+
+    /// Startet ein Upgrade auf die nächste Stufe (sofern Forschung es erlaubt).
+    fn upgrade(&mut self, x: u32, y: u32) {
+        let max = self.research.max_building_level();
+        if self.grid.begin_upgrade(x, y, max) {
+            if let Some(b) = self.grid.tile(x, y).and_then(|t| t.building) {
+                self.log
+                    .push(format!("Ausbau gestartet: {} → Stufe {}", name(b.kind), b.level));
+            }
+        }
+    }
+
+    /// Bricht ein laufendes Upgrade ab und erstattet das anteilig verbaute
+    /// Upgrade-Material zurück; das Gebäude kehrt auf seine vorige Stufe zurück.
+    fn cancel_upgrade_at(&mut self, x: u32, y: u32) {
+        let refund = self
+            .grid
+            .tile(x, y)
+            .and_then(|t| t.building)
+            .filter(|b| b.is_upgrading())
+            .map(|b| (b.build_cost(), b.progress));
+        if self.grid.cancel_upgrade(x, y) {
+            if let Some((cost, progress)) = refund {
+                for (r, q) in cost {
+                    self.stock.add(r, q * progress);
+                }
+            }
+            self.log.push(format!("Ausbau abgebrochen @ ({x},{y})"));
         }
     }
 
@@ -344,6 +376,8 @@ impl eframe::App for BuildApp {
                 Action::Demolish(x, y) => self.demolish(x, y),
                 Action::SetEnabled(x, y, on) => self.set_enabled(x, y, on),
                 Action::SetPriority(x, y, p) => self.set_priority(x, y, p),
+                Action::Upgrade(x, y) => self.upgrade(x, y),
+                Action::CancelUpgrade(x, y) => self.cancel_upgrade_at(x, y),
                 Action::StartResearch(id) => self.start_research(id),
                 Action::CancelResearch => self.cancel_research(),
                 Action::SetResearchPriority(p) => self.set_research_priority(p),
@@ -457,8 +491,8 @@ impl BuildApp {
                                 format!("{:.0}%", b.progress * 100.0),
                                 egui::Color32::from_rgb(230, 180, 80),
                             ),
-                            Some(b) if b.enabled => (short(b.kind).to_string(), egui::Color32::WHITE),
-                            Some(b) => (short(b.kind).to_string(), egui::Color32::from_gray(120)),
+                            Some(b) if b.enabled => (cell_label(b), egui::Color32::WHITE),
+                            Some(b) => (cell_label(b), egui::Color32::from_gray(120)),
                             None => (String::new(), egui::Color32::WHITE),
                         };
                         let btn = egui::Button::new(egui::RichText::new(text).strong().color(text_col))
@@ -525,20 +559,33 @@ impl BuildApp {
                                     }
                                 });
                             }
-                            // Baustelle: nur Abbrechen.
+                            // Baustelle oder laufendes Upgrade: nur Abbrechen.
                             Some(b) if b.under_construction() => {
-                                ui.label(format!(
-                                    "{} — im Bau {:.0}%",
-                                    name(b.kind),
-                                    b.progress * 100.0
-                                ));
-                                if ui.button("Bau abbrechen").clicked() {
-                                    actions.push(Action::Demolish(x, y));
-                                    ui.close_menu();
+                                if b.is_upgrading() {
+                                    ui.label(format!(
+                                        "{} → Stufe {} — im Ausbau {:.0}%",
+                                        name(b.kind),
+                                        b.level,
+                                        b.progress * 100.0
+                                    ));
+                                    if ui.button("Ausbau abbrechen").clicked() {
+                                        actions.push(Action::CancelUpgrade(x, y));
+                                        ui.close_menu();
+                                    }
+                                } else {
+                                    ui.label(format!(
+                                        "{} — im Bau {:.0}%",
+                                        name(b.kind),
+                                        b.progress * 100.0
+                                    ));
+                                    if ui.button("Bau abbrechen").clicked() {
+                                        actions.push(Action::Demolish(x, y));
+                                        ui.close_menu();
+                                    }
                                 }
                             }
                             Some(b) => {
-                                ui.label(name(b.kind));
+                                ui.label(format!("{} — Stufe {}/{}", name(b.kind), b.level, gamecore::MAX_LEVEL));
                                 let toggle = if b.enabled { "Ausschalten" } else { "Einschalten" };
                                 if ui.button(toggle).clicked() {
                                     actions.push(Action::SetEnabled(x, y, !b.enabled));
@@ -561,11 +608,32 @@ impl BuildApp {
                                         },
                                     );
                                 }
-                                // Info: Boni und Abzüge aufgeschlüsselt.
+                                // Ausbauen auf die nächste Stufe (Forschungs-gegated).
+                                if b.level < gamecore::MAX_LEVEL {
+                                    let next = b.level + 1;
+                                    let mut probe = b;
+                                    probe.level = next;
+                                    let label =
+                                        format!("Ausbauen → Stufe {next} ({})", cost_string(&probe.build_cost()));
+                                    if next <= self.research.max_building_level() {
+                                        if ui.button(label).clicked() {
+                                            actions.push(Action::Upgrade(x, y));
+                                            ui.close_menu();
+                                        }
+                                    } else {
+                                        let stufe = if next == 2 { "II" } else { "III" };
+                                        ui.add_enabled(false, egui::Button::new(format!("🔒 {label}")))
+                                            .on_disabled_hover_text(format!(
+                                                "Erst Ausbaustufe {stufe} erforschen"
+                                            ));
+                                    }
+                                }
+                                // Info: Boni und Abzüge aufgeschlüsselt (auf aktueller Stufe).
                                 ui.menu_button("Info", |ui| {
                                     let spec = b.kind.spec();
                                     if let Some(out) = spec.output {
-                                        ui.label(format!("Basis: {:.2}/s → {out:?}", spec.base_rate));
+                                        let rate = b.effective_rate();
+                                        ui.label(format!("Basis (St. {}): {rate:.2}/s → {out:?}", b.level));
                                         let mult = self.grid.adjacency_multiplier(x, y);
                                         ui.label(format!("Adjazenz: ×{mult:.2}"));
                                         let contribs = self.grid.adjacency_contributions(x, y);
@@ -576,12 +644,12 @@ impl BuildApp {
                                                 ui.label(format!("   +{:.0}%  {}", bonus * 100.0, name(k)));
                                             }
                                         }
-                                        ui.label(format!("Effektiv: {:.2}/s", spec.base_rate * mult));
+                                        ui.label(format!("Effektiv: {:.2}/s", rate * mult));
                                     }
-                                    if spec.energy_demand > 0.0 {
-                                        ui.label(format!("Energiebedarf: −{:.1}/s", spec.energy_demand));
+                                    if b.energy_demand() > 0.0 {
+                                        ui.label(format!("Energiebedarf: −{:.1}/s", b.energy_demand()));
                                     }
-                                    if spec.energy_output > 0.0 {
+                                    if b.energy_output() > 0.0 {
                                         let note = if spec.solar {
                                             "  (×1/r²)"
                                         } else if spec.fuel_rate > 0.0 {
@@ -589,10 +657,10 @@ impl BuildApp {
                                         } else {
                                             ""
                                         };
-                                        ui.label(format!("Energie: +{:.1}/s{note}", spec.energy_output));
+                                        ui.label(format!("Energie: +{:.1}/s{note}", b.energy_output()));
                                     }
-                                    if b.kind.storage() > 0.0 {
-                                        ui.label(format!("Lagerkapazität: +{:.0}", b.kind.storage()));
+                                    if b.storage() > 0.0 {
+                                        ui.label(format!("Lagerkapazität: +{:.0}", b.storage()));
                                     }
                                 });
                                 if ui.button("Abreißen").clicked() {
@@ -611,9 +679,14 @@ impl BuildApp {
     fn tile_tooltip(&self, x: u32, y: u32, tile: &gamecore::Tile) -> String {
         match tile.building {
             Some(b) if b.under_construction() => {
-                let cost = cost_string(b.kind.spec().build_cost);
+                let cost = cost_string(&b.build_cost());
+                let (verb, stufe) = if b.is_upgrading() {
+                    ("im Ausbau", format!(" → Stufe {}", b.level))
+                } else {
+                    ("im Bau", String::new())
+                };
                 format!(
-                    "{} — im Bau {:.0}%\nauf {}\nBaukosten: {}",
+                    "{}{stufe} — {verb} {:.0}%\nauf {}\nKosten: {}",
                     name(b.kind),
                     b.progress * 100.0,
                     terrain_name(tile.terrain),
@@ -626,8 +699,9 @@ impl BuildApp {
                 if spec.output.is_some() {
                     let mult = self.grid.adjacency_multiplier(x, y);
                     let mut s = format!(
-                        "{}{state} auf {}\nAdjazenz ×{:.2}",
+                        "{} St.{}{state} auf {}\nAdjazenz ×{:.2}",
                         name(b.kind),
+                        b.level,
                         terrain_name(tile.terrain),
                         mult
                     );
@@ -916,6 +990,15 @@ fn name(kind: BuildingKind) -> &'static str {
     }
 }
 
+/// Kürzel auf der Rasterkachel, mit Stufen-Ziffer ab Stufe 2 (z. B. „Mi2").
+fn cell_label(b: Building) -> String {
+    if b.level > 1 {
+        format!("{}{}", short(b.kind), b.level)
+    } else {
+        short(b.kind).to_string()
+    }
+}
+
 fn short(kind: BuildingKind) -> &'static str {
     use BuildingKind::*;
     match kind {
@@ -996,6 +1079,7 @@ fn rate_label(rate_per_hour: f64) -> (String, egui::Color32) {
 fn unlock_text(unlock: Option<Unlock>) -> String {
     match unlock {
         Some(Unlock::Building(k)) => format!("→ schaltet {} frei", name(k)),
+        Some(Unlock::UpgradeLevel(l)) => format!("→ erlaubt Gebäude-Stufe {l}"),
         Some(Unlock::Ascent(s)) => format!("→ schaltet {s} frei"),
         None => "→ öffnet Folge-Forschung".to_string(),
     }
